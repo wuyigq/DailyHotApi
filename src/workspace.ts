@@ -471,13 +471,49 @@ const scoreTopic = (
 const topicKey = (topic: WorkspaceTopic) =>
   topic.title
     .toLowerCase()
+    .replace(/(官方|突发|热搜|最新|视频|组图|快讯|话题)/gu, "")
     .replace(/[^\p{L}\p{N}]+/gu, "")
     .slice(0, 48);
+
+const topicSimilarity = (left: string, right: string) => {
+  if (!left || !right) return 0;
+  if (left === right) return 1;
+  const minLength = Math.min(left.length, right.length);
+  const maxLength = Math.max(left.length, right.length);
+  if (minLength >= 12 && (left.includes(right) || right.includes(left))) {
+    return minLength / maxLength;
+  }
+  if (minLength < 8) return 0;
+
+  const bigrams = (value: string) => {
+    const grams = new Map<string, number>();
+    for (let index = 0; index < value.length - 1; index += 1) {
+      const gram = value.slice(index, index + 2);
+      grams.set(gram, (grams.get(gram) || 0) + 1);
+    }
+    return grams;
+  };
+  const leftBigrams = bigrams(left);
+  const rightBigrams = bigrams(right);
+  let intersection = 0;
+  for (const [gram, count] of leftBigrams) {
+    intersection += Math.min(count, rightBigrams.get(gram) || 0);
+  }
+  return (2 * intersection) / (Math.max(left.length - 1, 1) + Math.max(right.length - 1, 1));
+};
+
+const findTopicGroupKey = (grouped: Map<string, WorkspaceTopic>, key: string) => {
+  if (grouped.has(key)) return key;
+  for (const existingKey of grouped.keys()) {
+    if (topicSimilarity(existingKey, key) >= 0.82) return existingKey;
+  }
+  return key;
+};
 
 const mergeTopics = (topics: WorkspaceTopic[]) => {
   const grouped = new Map<string, WorkspaceTopic>();
   topics.forEach((topic) => {
-    const key = topicKey(topic);
+    const key = findTopicGroupKey(grouped, topicKey(topic));
     const sourceInfo = {
       source: topic.source,
       sourceTitle: topic.sourceTitle,
