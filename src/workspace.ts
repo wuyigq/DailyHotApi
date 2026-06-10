@@ -105,6 +105,14 @@ type PublishPackageFile = {
   content: string;
 };
 
+type MediaSuggestion = {
+  coverTitle: string;
+  imagePrompt: string;
+  size: string;
+  styleTips: string[];
+  copyrightNotice: string;
+};
+
 type PublishPackage = {
   draftId: string;
   platform: string;
@@ -115,6 +123,7 @@ type PublishPackage = {
   copyText: string;
   mobileShareText: string;
   checklist: string[];
+  mediaSuggestion: MediaSuggestion;
   deeplinks: PublishPackageLink[];
   files: PublishPackageFile[];
 };
@@ -720,6 +729,65 @@ const uniqueTags = (words: string[]) =>
     ),
   );
 
+const mediaSizes: Record<string, string> = {
+  weibo: "1080x1080",
+  xiaohongshu: "1242x1660",
+  article: "900x500",
+  moments: "1080x1080",
+  video: "1080x1920",
+};
+
+const buildMediaSuggestion = (draft: WorkspaceDraft, title: string, hashtags: string[]): MediaSuggestion => {
+  const topic = draft.topic;
+  const sourceNames = topic.relatedSources?.map((source) => source.sourceTitle).filter(Boolean) || [];
+  const sourceText = Array.from(new Set([topic.sourceTitle, ...sourceNames])).slice(0, 3).join("、");
+  const keywordText = hashtags.slice(0, 4).join("、") || "热点观察";
+  const platformName = platformNames[draft.platform] || draft.platform;
+  const visualAngle = draft.platform === "video"
+    ? "竖屏口播封面，人物或大字标题居中，留出字幕安全区"
+    : draft.platform === "article"
+      ? "横版公众号头图，新闻感版式，留出标题区"
+      : draft.platform === "xiaohongshu"
+        ? "小红书信息卡片风，强标题、低饱和背景、可读性优先"
+        : "社交媒体方图，标题清晰、背景简洁、适合手机预览";
+
+  return {
+    coverTitle: title.length > 28 ? `${title.slice(0, 27)}...` : title,
+    imagePrompt: [
+      `为「${platformName}」生成一张配图/封面。`,
+      `主题：${title}。`,
+      `关键词：${keywordText}。`,
+      `视觉方向：${visualAngle}。`,
+      `信息来源参考：${sourceText || "用户提供的热点来源"}。`,
+      "不要使用真实人物肖像、平台 Logo、新闻截图或未经授权素材，不要生成误导性现场画面。",
+    ].join("\n"),
+    size: mediaSizes[draft.platform] || "1080x1080",
+    styleTips: [
+      "标题文字不超过两行，移动端缩略图仍需可读。",
+      "画面只表达话题氛围，不伪造事实现场或官方背书。",
+      "高风险话题使用中性视觉，不使用煽动性符号、血腥或攻击性元素。",
+    ],
+    copyrightNotice: "仅使用自有素材、可商用素材或 AI 生成素材；发布前人工确认不包含第三方 Logo、截图、肖像和受版权保护内容。",
+  };
+};
+
+const buildMediaFile = (draft: WorkspaceDraft, suggestion: MediaSuggestion): PublishPackageFile => ({
+  filename: `${draft.id}-media.txt`,
+  mimeType: "text/plain;charset=utf-8",
+  content: [
+    `封面标题：${suggestion.coverTitle}`,
+    `建议尺寸：${suggestion.size}`,
+    "",
+    "图片提示词：",
+    suggestion.imagePrompt,
+    "",
+    "风格注意事项：",
+    ...suggestion.styleTips.map((tip) => `- ${tip}`),
+    "",
+    `版权提示：${suggestion.copyrightNotice}`,
+  ].join("\n"),
+});
+
 const buildPublishPackage = (draft: WorkspaceDraft): PublishPackage => {
   const topic = draft.topic;
   const title = extractTitle(draft.content, topic.title);
@@ -732,6 +800,8 @@ const buildPublishPackage = (draft: WorkspaceDraft): PublishPackage => {
   const tagText = hashtags.map((tag) => `#${tag}`).join(" ");
   const sourceLine = topic.url ? `\n\n原始来源：${topic.url}` : "";
   const riskLine = topic.riskLevel === "high" ? "\n\n发布提醒：高风险热点，请先二次核实来源。" : "";
+  const mediaSuggestion = buildMediaSuggestion(draft, title, hashtags);
+  const mediaFile = buildMediaFile(draft, mediaSuggestion);
 
   if (draft.platform === "xiaohongshu") {
     const copyText = `${title}\n\n${draft.content}\n\n${tagText}${sourceLine}${riskLine}`;
@@ -749,11 +819,13 @@ const buildPublishPackage = (draft: WorkspaceDraft): PublishPackage => {
         "正文保留来源说明，高风险内容先人工复核。",
         "发布前确认标签数量和平台敏感词提示。",
       ],
+      mediaSuggestion,
       deeplinks: [
         { label: "打开小红书", url: "https://www.xiaohongshu.com/", mobileUrl: "https://www.xiaohongshu.com/" },
       ],
       files: [
         { filename: `${draft.id}-xiaohongshu.txt`, mimeType: "text/plain;charset=utf-8", content: copyText },
+        mediaFile,
       ],
     };
   }
@@ -777,6 +849,7 @@ const buildPublishPackage = (draft: WorkspaceDraft): PublishPackage => {
         "字幕、标题、封面保持一致，不夸大结论。",
         "发布后回填曝光、点赞、评论、转发等指标。",
       ],
+      mediaSuggestion,
       deeplinks: [
         { label: "打开抖音网页版", url: "https://www.douyin.com/" },
         { label: "打开哔哩哔哩投稿", url: "https://member.bilibili.com/platform/upload/video/frame" },
@@ -784,6 +857,7 @@ const buildPublishPackage = (draft: WorkspaceDraft): PublishPackage => {
       files: [
         { filename: `${draft.id}-script.txt`, mimeType: "text/plain;charset=utf-8", content: draft.content },
         { filename: `${draft.id}-subtitle.txt`, mimeType: "text/plain;charset=utf-8", content: subtitleText },
+        mediaFile,
       ],
     };
   }
@@ -804,11 +878,13 @@ const buildPublishPackage = (draft: WorkspaceDraft): PublishPackage => {
         "正文继续补充可靠来源、引用和案例后再发布。",
         "标题避免夸大，应和正文观点一致。",
       ],
+      mediaSuggestion,
       deeplinks: [
         { label: "打开公众号平台", url: "https://mp.weixin.qq.com/" },
       ],
       files: [
         { filename: `${draft.id}-article.txt`, mimeType: "text/plain;charset=utf-8", content: copyText },
+        mediaFile,
       ],
     };
   }
@@ -829,11 +905,13 @@ const buildPublishPackage = (draft: WorkspaceDraft): PublishPackage => {
         "保留来源说明，必要时只发给合适分组。",
         "高风险话题先审核再发布。",
       ],
+      mediaSuggestion,
       deeplinks: [
         { label: "打开微信网页版", url: "https://wx.qq.com/" },
       ],
       files: [
         { filename: `${draft.id}-moments.txt`, mimeType: "text/plain;charset=utf-8", content: copyText },
+        mediaFile,
       ],
     };
   }
@@ -853,11 +931,13 @@ const buildPublishPackage = (draft: WorkspaceDraft): PublishPackage => {
       "高风险热点避免绝对化表达，保留来源。",
       "发布完成后回到工作台记录发布动作。",
     ],
+    mediaSuggestion,
     deeplinks: [
       { label: "打开微博", url: "https://weibo.com/", mobileUrl: "https://m.weibo.cn/" },
     ],
     files: [
       { filename: `${draft.id}-weibo.txt`, mimeType: "text/plain;charset=utf-8", content: copyText },
+      mediaFile,
     ],
   };
 };
