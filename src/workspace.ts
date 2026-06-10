@@ -162,6 +162,7 @@ type PlatformAccount = {
   userId: string;
   platform: string;
   displayName: string;
+  status?: "active" | "inactive";
   profileUrl?: string;
   note?: string;
   createdAt: string;
@@ -1271,6 +1272,7 @@ app.post("/platform-accounts", async (c) => {
     userId,
     platform,
     displayName,
+    status: "active",
     profileUrl: body.profileUrl ? String(body.profileUrl) : undefined,
     note: body.note ? String(body.note) : undefined,
     createdAt: new Date().toISOString(),
@@ -1296,11 +1298,29 @@ app.patch("/platform-accounts/:id", async (c) => {
 
   if (body.platform !== undefined) account.platform = String(body.platform).trim() || account.platform;
   if (body.displayName !== undefined) account.displayName = String(body.displayName).trim() || account.displayName;
+  if (["active", "inactive"].includes(body.status)) account.status = body.status;
   if (body.profileUrl !== undefined) account.profileUrl = body.profileUrl ? String(body.profileUrl) : undefined;
   if (body.note !== undefined) account.note = body.note ? String(body.note) : undefined;
   account.updatedAt = new Date().toISOString();
 
   addAuditLog(store, userId, "platform.account.updated", "platformAccount", account.id, {
+    platform: account.platform,
+    displayName: account.displayName,
+  });
+  writeStore(store);
+
+  return c.json({ code: 200, data: account });
+});
+
+app.delete("/platform-accounts/:id", (c) => {
+  const userId = getUserId(c);
+  const accountId = c.req.param("id");
+  const store = readStore();
+  const account = store.platformAccounts.find((item) => item.id === accountId && item.userId === userId);
+  if (!account) return c.json({ code: 404, message: "Platform account not found" }, 404);
+
+  store.platformAccounts = store.platformAccounts.filter((item) => item.id !== accountId);
+  addAuditLog(store, userId, "platform.account.deleted", "platformAccount", account.id, {
     platform: account.platform,
     displayName: account.displayName,
   });
@@ -1339,6 +1359,7 @@ app.post("/publish-schedules", async (c) => {
     ? store.platformAccounts.find((item) => item.id === body.accountId && item.userId === userId)
     : undefined;
   if (body.accountId && !account) return c.json({ code: 404, message: "Platform account not found" }, 404);
+  if (account?.status === "inactive") return c.json({ code: 400, message: "Platform account is inactive" }, 400);
 
   const scheduledAt = body.scheduledAt ? new Date(String(body.scheduledAt)) : new Date(Date.now() + 2 * 60 * 60 * 1000);
   if (Number.isNaN(scheduledAt.getTime())) {
@@ -1358,6 +1379,9 @@ app.post("/publish-schedules", async (c) => {
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
+  if (account && account.platform !== schedule.platform) {
+    return c.json({ code: 400, message: "Platform account does not match draft platform" }, 400);
+  }
   store.publishSchedules.push(schedule);
   addAuditLog(store, userId, "publish.schedule.created", "publishSchedule", schedule.id, {
     draftId: draft.id,
@@ -1453,9 +1477,14 @@ app.post("/publish-records", async (c) => {
     ? store.platformAccounts.find((item) => item.id === body.accountId && item.userId === userId)
     : undefined;
   if (body.accountId && !account) return c.json({ code: 404, message: "Platform account not found" }, 404);
+  if (account?.status === "inactive") return c.json({ code: 400, message: "Platform account is inactive" }, 400);
+  const platform = String(body.platform || draft.platform);
+  if (account && account.platform !== platform) {
+    return c.json({ code: 400, message: "Platform account does not match draft platform" }, 400);
+  }
 
   const record = createPublishRecord(store, draft, {
-    platform: String(body.platform || draft.platform),
+    platform,
     accountId: account?.id,
     accountName: account?.displayName,
     status: ["assisted", "published", "failed"].includes(body.status) ? body.status : "assisted",
