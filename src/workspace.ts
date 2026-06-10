@@ -30,6 +30,8 @@ type WorkspaceDraft = {
   platform: string;
   tone: WorkspacePreferences["tone"];
   content: string;
+  reviewStatus?: "draft" | "reviewing" | "approved" | "rejected";
+  reviewNote?: string;
   createdAt: string;
 };
 
@@ -54,8 +56,27 @@ type PublishRecord = {
   draftId: string;
   platform: string;
   status: "assisted" | "published" | "failed";
+  metrics?: PublishMetrics;
   publishUrl?: string;
   note?: string;
+  createdAt: string;
+};
+
+type PublishMetrics = {
+  views: number;
+  likes: number;
+  comments: number;
+  shares: number;
+  leads: number;
+};
+
+type AuditLog = {
+  id: string;
+  userId: string;
+  action: string;
+  targetType: string;
+  targetId: string;
+  detail?: Record<string, unknown>;
   createdAt: string;
 };
 
@@ -64,6 +85,7 @@ type WorkspaceStore = {
   personas?: Record<string, WorkspacePersona>;
   drafts: WorkspaceDraft[];
   publishRecords?: PublishRecord[];
+  auditLogs?: AuditLog[];
 };
 
 const app = new Hono();
@@ -116,11 +138,12 @@ const normalizeStore = (store: WorkspaceStore): Required<WorkspaceStore> => ({
   personas: store.personas || {},
   drafts: store.drafts || [],
   publishRecords: store.publishRecords || [],
+  auditLogs: store.auditLogs || [],
 });
 
 const readStore = (): Required<WorkspaceStore> => {
   if (!fs.existsSync(storePath)) {
-    return { preferences: {}, personas: {}, drafts: [], publishRecords: [] };
+    return { preferences: {}, personas: {}, drafts: [], publishRecords: [], auditLogs: [] };
   }
   return normalizeStore(JSON.parse(fs.readFileSync(storePath, "utf-8")) as WorkspaceStore);
 };
@@ -152,6 +175,25 @@ const savePersona = (persona: WorkspacePersona) => {
   store.personas[persona.userId] = persona;
   writeStore(store);
   return persona;
+};
+
+const addAuditLog = (
+  store: Required<WorkspaceStore>,
+  userId: string,
+  action: string,
+  targetType: string,
+  targetId: string,
+  detail?: Record<string, unknown>,
+) => {
+  store.auditLogs.push({
+    id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    userId,
+    action,
+    targetType,
+    targetId,
+    detail,
+    createdAt: new Date().toISOString(),
+  });
 };
 
 const createRouteContext = (params: Record<string, string> = {}) => ({
@@ -300,6 +342,12 @@ app.put("/preferences", async (c) => {
     sources: normalizeWords(body.sources).length ? normalizeWords(body.sources) : defaultSources,
     tone: ["balanced", "sharp", "casual", "professional"].includes(body.tone) ? body.tone : "balanced",
   });
+  const store = readStore();
+  addAuditLog(store, userId, "preferences.updated", "preferences", userId, {
+    keywords: preferences.keywords,
+    categories: preferences.categories,
+  });
+  writeStore(store);
   return c.json({ code: 200, data: preferences });
 });
 
@@ -322,6 +370,12 @@ app.put("/persona", async (c) => {
     forbiddenWords: normalizeWords(body.forbiddenWords),
     boundaries: normalizeWords(body.boundaries),
   });
+  const store = readStore();
+  addAuditLog(store, userId, "persona.updated", "persona", userId, {
+    displayName: persona.displayName,
+    forbiddenWords: persona.forbiddenWords,
+  });
+  writeStore(store);
   return c.json({ code: 200, data: persona });
 });
 
@@ -357,6 +411,28 @@ app.get("/drafts", (c) => {
   });
 });
 
+app.patch("/drafts/:id/review", async (c) => {
+  const userId = getUserId(c);
+  const draftId = c.req.param("id");
+  const body = await c.req.json().catch(() => ({}));
+  const status = ["draft", "reviewing", "approved", "rejected"].includes(body.reviewStatus)
+    ? body.reviewStatus
+    : "reviewing";
+  const store = readStore();
+  const draft = store.drafts.find((item) => item.id === draftId && item.userId === userId);
+  if (!draft) return c.json({ code: 404, message: "Draft not found" }, 404);
+
+  draft.reviewStatus = status;
+  draft.reviewNote = body.reviewNote ? String(body.reviewNote) : undefined;
+  addAuditLog(store, userId, "draft.reviewed", "draft", draft.id, {
+    reviewStatus: draft.reviewStatus,
+    reviewNote: draft.reviewNote,
+  });
+  writeStore(store);
+
+  return c.json({ code: 200, data: draft });
+});
+
 app.post("/drafts/:id/check", async (c) => {
   const userId = getUserId(c);
   const draftId = c.req.param("id");
@@ -366,7 +442,13 @@ app.post("/drafts/:id/check", async (c) => {
   if (!draft) return c.json({ code: 404, message: "Draft not found" }, 404);
 
   const content = String(body.content || draft.content);
-  return c.json({ code: 200, data: checkDraft(draft, content, getPersona(userId)) });
+  const checkResult = checkDraft(draft, content, getPersona(userId));
+  addAuditLog(store, userId, "draft.checked", "draft", draft.id, {
+    passed: checkResult.passed,
+    issueCount: checkResult.issues.length,
+  });
+  writeStore(store);
+  return c.json({ code: 200, data: checkResult });
 });
 
 app.get("/publish-records", (c) => {
@@ -393,14 +475,99 @@ app.post("/publish-records", async (c) => {
     draftId: draft.id,
     platform: String(body.platform || draft.platform),
     status: ["assisted", "published", "failed"].includes(body.status) ? body.status : "assisted",
+    metrics: {
+      views: 0,
+      likes: 0,
+      comments: 0,
+      shares: 0,
+      leads: 0,
+    },
     publishUrl: body.publishUrl ? String(body.publishUrl) : undefined,
     note: body.note ? String(body.note) : "已复制/分享到平台，等待用户手动确认发布。",
     createdAt: new Date().toISOString(),
   };
   store.publishRecords.push(record);
+  addAuditLog(store, userId, "publish.recorded", "publishRecord", record.id, {
+    draftId: draft.id,
+    platform: record.platform,
+    status: record.status,
+  });
   writeStore(store);
 
   return c.json({ code: 200, data: record });
+});
+
+app.patch("/publish-records/:id/metrics", async (c) => {
+  const userId = getUserId(c);
+  const recordId = c.req.param("id");
+  const body = await c.req.json().catch(() => ({}));
+  const store = readStore();
+  const record = store.publishRecords.find((item) => item.id === recordId && item.userId === userId);
+  if (!record) return c.json({ code: 404, message: "Publish record not found" }, 404);
+
+  record.metrics = {
+    views: Number(body.views || 0),
+    likes: Number(body.likes || 0),
+    comments: Number(body.comments || 0),
+    shares: Number(body.shares || 0),
+    leads: Number(body.leads || 0),
+  };
+  record.status = ["assisted", "published", "failed"].includes(body.status) ? body.status : record.status;
+  addAuditLog(store, userId, "publish.metrics.updated", "publishRecord", record.id, {
+    metrics: record.metrics,
+    status: record.status,
+  });
+  writeStore(store);
+
+  return c.json({ code: 200, data: record });
+});
+
+app.get("/overview", (c) => {
+  const userId = getUserId(c);
+  const store = readStore();
+  const drafts = store.drafts.filter((draft) => draft.userId === userId);
+  const records = store.publishRecords.filter((record) => record.userId === userId);
+  const totals = records.reduce(
+    (acc, record) => {
+      const metrics = record.metrics || { views: 0, likes: 0, comments: 0, shares: 0, leads: 0 };
+      acc.views += metrics.views;
+      acc.likes += metrics.likes;
+      acc.comments += metrics.comments;
+      acc.shares += metrics.shares;
+      acc.leads += metrics.leads;
+      return acc;
+    },
+    { views: 0, likes: 0, comments: 0, shares: 0, leads: 0 },
+  );
+  const reviewStatus = drafts.reduce<Record<string, number>>((acc, draft) => {
+    const status = draft.reviewStatus || "draft";
+    acc[status] = (acc[status] || 0) + 1;
+    return acc;
+  }, {});
+
+  return c.json({
+    code: 200,
+    data: {
+      draftCount: drafts.length,
+      publishCount: records.length,
+      reviewStatus,
+      totals,
+      engagementRate: totals.views > 0 ? Number(((totals.likes + totals.comments + totals.shares) / totals.views).toFixed(4)) : 0,
+      leadRate: totals.views > 0 ? Number((totals.leads / totals.views).toFixed(4)) : 0,
+    },
+  });
+});
+
+app.get("/audit-logs", (c) => {
+  const userId = getUserId(c);
+  const store = readStore();
+  return c.json({
+    code: 200,
+    data: store.auditLogs
+      .filter((log) => log.userId === userId)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .slice(0, 100),
+  });
 });
 
 app.post("/generate", async (c) => {
@@ -422,10 +589,16 @@ app.post("/generate", async (c) => {
     platform,
     tone,
     content: buildDraft(topic, platform, tone, persona),
+    reviewStatus: "draft",
     createdAt: new Date().toISOString(),
   };
   const store = readStore();
   store.drafts.push(draft);
+  addAuditLog(store, userId, "draft.generated", "draft", draft.id, {
+    platform,
+    topicTitle: topic.title,
+    riskLevel: topic.riskLevel,
+  });
   writeStore(store);
 
   return c.json({ code: 200, data: draft });
