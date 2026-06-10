@@ -51,6 +51,32 @@ type PublishCheckIssue = {
   message: string;
 };
 
+type PublishPackageLink = {
+  label: string;
+  url: string;
+  mobileUrl?: string;
+};
+
+type PublishPackageFile = {
+  filename: string;
+  mimeType: string;
+  content: string;
+};
+
+type PublishPackage = {
+  draftId: string;
+  platform: string;
+  platformName: string;
+  title: string;
+  content: string;
+  hashtags: string[];
+  copyText: string;
+  mobileShareText: string;
+  checklist: string[];
+  deeplinks: PublishPackageLink[];
+  files: PublishPackageFile[];
+};
+
 type PublishRecord = {
   id: string;
   userId: string;
@@ -324,6 +350,119 @@ const platformLimits: Record<string, number> = {
   video: 1200,
 };
 
+const platformNames: Record<string, string> = {
+  weibo: "微博短评",
+  xiaohongshu: "小红书笔记",
+  video: "视频口播",
+};
+
+const extractTitle = (content: string, fallback: string) => {
+  const matched = content.match(/^(标题|口播标题)：(.+)$/m);
+  return matched?.[2]?.trim() || fallback;
+};
+
+const uniqueTags = (words: string[]) =>
+  Array.from(
+    new Set(
+      words
+        .map((word) => String(word).replace(/^#/, "").trim())
+        .filter(Boolean)
+        .slice(0, 8),
+    ),
+  );
+
+const buildPublishPackage = (draft: WorkspaceDraft): PublishPackage => {
+  const topic = draft.topic;
+  const title = extractTitle(draft.content, topic.title);
+  const hashtags = uniqueTags([
+    ...topic.matchedCategories,
+    ...topic.matchedKeywords,
+    "热点观察",
+    draft.platform === "video" ? "口播脚本" : "今日话题",
+  ]);
+  const tagText = hashtags.map((tag) => `#${tag}`).join(" ");
+  const sourceLine = topic.url ? `\n\n原始来源：${topic.url}` : "";
+  const riskLine = topic.riskLevel === "high" ? "\n\n发布提醒：高风险热点，请先二次核实来源。" : "";
+
+  if (draft.platform === "xiaohongshu") {
+    const copyText = `${title}\n\n${draft.content}\n\n${tagText}${sourceLine}${riskLine}`;
+    return {
+      draftId: draft.id,
+      platform: draft.platform,
+      platformName: platformNames[draft.platform],
+      title,
+      content: draft.content,
+      hashtags,
+      copyText,
+      mobileShareText: copyText,
+      checklist: [
+        "首图或配图需与正文一致，避免标题党。",
+        "正文保留来源说明，高风险内容先人工复核。",
+        "发布前确认标签数量和平台敏感词提示。",
+      ],
+      deeplinks: [
+        { label: "打开小红书", url: "https://www.xiaohongshu.com/", mobileUrl: "https://www.xiaohongshu.com/" },
+      ],
+      files: [
+        { filename: `${draft.id}-xiaohongshu.txt`, mimeType: "text/plain;charset=utf-8", content: copyText },
+      ],
+    };
+  }
+
+  if (draft.platform === "video") {
+    const subtitleText = draft.content
+      .split(/\n+/)
+      .filter((line) => line.trim() && !line.startsWith("来源："))
+      .join("\n");
+    return {
+      draftId: draft.id,
+      platform: draft.platform,
+      platformName: platformNames[draft.platform],
+      title,
+      content: draft.content,
+      hashtags,
+      copyText: `${title}\n\n${draft.content}\n\n${tagText}${sourceLine}${riskLine}`,
+      mobileShareText: `${title}\n\n${draft.content}`,
+      checklist: [
+        "录制前确认口播中的事实和来源。",
+        "字幕、标题、封面保持一致，不夸大结论。",
+        "发布后回填曝光、点赞、评论、转发等指标。",
+      ],
+      deeplinks: [
+        { label: "打开抖音网页版", url: "https://www.douyin.com/" },
+        { label: "打开哔哩哔哩投稿", url: "https://member.bilibili.com/platform/upload/video/frame" },
+      ],
+      files: [
+        { filename: `${draft.id}-script.txt`, mimeType: "text/plain;charset=utf-8", content: draft.content },
+        { filename: `${draft.id}-subtitle.txt`, mimeType: "text/plain;charset=utf-8", content: subtitleText },
+      ],
+    };
+  }
+
+  const copyText = `${draft.content}\n\n${tagText}${sourceLine}${riskLine}`;
+  return {
+    draftId: draft.id,
+    platform: draft.platform,
+    platformName: platformNames[draft.platform] || draft.platform,
+    title,
+    content: draft.content,
+    hashtags,
+    copyText,
+    mobileShareText: copyText,
+    checklist: [
+      "先复制文案，再跳转平台手动确认发布。",
+      "高风险热点避免绝对化表达，保留来源。",
+      "发布完成后回到工作台记录发布动作。",
+    ],
+    deeplinks: [
+      { label: "打开微博", url: "https://weibo.com/", mobileUrl: "https://m.weibo.cn/" },
+    ],
+    files: [
+      { filename: `${draft.id}-weibo.txt`, mimeType: "text/plain;charset=utf-8", content: copyText },
+    ],
+  };
+};
+
 const checkDraft = (draft: WorkspaceDraft, content: string, persona: WorkspacePersona) => {
   const issues: PublishCheckIssue[] = [];
   const limit = platformLimits[draft.platform] || 2000;
@@ -505,6 +644,23 @@ app.post("/drafts/:id/check", async (c) => {
   });
   writeStore(store);
   return c.json({ code: 200, data: checkResult });
+});
+
+app.get("/drafts/:id/publish-package", (c) => {
+  const userId = getUserId(c);
+  const draftId = c.req.param("id");
+  const store = readStore();
+  const draft = store.drafts.find((item) => item.id === draftId && item.userId === userId);
+  if (!draft) return c.json({ code: 404, message: "Draft not found" }, 404);
+
+  const publishPackage = buildPublishPackage(draft);
+  addAuditLog(store, userId, "publish.package.generated", "draft", draft.id, {
+    platform: draft.platform,
+    fileCount: publishPackage.files.length,
+  });
+  writeStore(store);
+
+  return c.json({ code: 200, data: publishPackage });
 });
 
 app.get("/publish-records", (c) => {
