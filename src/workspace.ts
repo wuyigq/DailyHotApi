@@ -979,6 +979,27 @@ const checkDraft = (draft: WorkspaceDraft, content: string, persona: WorkspacePe
   };
 };
 
+const syncDueSchedules = (store: Required<WorkspaceStore>, userId?: string) => {
+  const now = Date.now();
+  let changed = false;
+  for (const schedule of store.publishSchedules) {
+    if (userId && schedule.userId !== userId) continue;
+    if (schedule.status !== "pending") continue;
+    const scheduledAt = new Date(schedule.scheduledAt).getTime();
+    if (!Number.isNaN(scheduledAt) && scheduledAt <= now) {
+      schedule.status = "ready";
+      schedule.updatedAt = new Date().toISOString();
+      addAuditLog(store, schedule.userId, "publish.schedule.ready", "publishSchedule", schedule.id, {
+        draftId: schedule.draftId,
+        platform: schedule.platform,
+        scheduledAt: schedule.scheduledAt,
+      });
+      changed = true;
+    }
+  }
+  return changed;
+};
+
 app.post("/auth/login", async (c) => {
   const body = await c.req.json().catch(() => ({}));
   const email = String(body.email || "").trim();
@@ -1332,6 +1353,7 @@ app.delete("/platform-accounts/:id", (c) => {
 app.get("/publish-schedules", (c) => {
   const userId = getUserId(c);
   const store = readStore();
+  if (syncDueSchedules(store, userId)) writeStore(store);
   return c.json({
     code: 200,
     data: store.publishSchedules
@@ -1374,7 +1396,7 @@ app.post("/publish-schedules", async (c) => {
     accountId: account?.id,
     accountName: account?.displayName,
     scheduledAt: scheduledAt.toISOString(),
-    status: "pending",
+    status: scheduledAt.getTime() <= Date.now() ? "ready" : "pending",
     note: body.note ? String(body.note) : "等待到点后手动发布。",
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
@@ -1390,6 +1412,13 @@ app.post("/publish-schedules", async (c) => {
     accountName: schedule.accountName,
     scheduledAt: schedule.scheduledAt,
   });
+  if (schedule.status === "ready") {
+    addAuditLog(store, userId, "publish.schedule.ready", "publishSchedule", schedule.id, {
+      draftId: draft.id,
+      platform: schedule.platform,
+      scheduledAt: schedule.scheduledAt,
+    });
+  }
   writeStore(store);
 
   return c.json({ code: 200, data: schedule });
@@ -1531,6 +1560,7 @@ app.patch("/publish-records/:id/metrics", async (c) => {
 app.get("/overview", (c) => {
   const userId = getUserId(c);
   const store = readStore();
+  if (syncDueSchedules(store, userId)) writeStore(store);
   const drafts = store.drafts.filter((draft) => draft.userId === userId);
   const records = store.publishRecords.filter((record) => record.userId === userId);
   const schedules = store.publishSchedules.filter((schedule) => schedule.userId === userId);
@@ -1602,6 +1632,7 @@ app.get("/overview", (c) => {
 app.get("/insights", (c) => {
   const userId = getUserId(c);
   const store = readStore();
+  if (syncDueSchedules(store, userId)) writeStore(store);
   const records = store.publishRecords.filter((record) => record.userId === userId);
   const schedules = store.publishSchedules.filter((schedule) => schedule.userId === userId);
   const drafts = store.drafts.filter((draft) => draft.userId === userId);
