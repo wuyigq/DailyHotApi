@@ -39,6 +39,7 @@ type WorkspaceDraft = {
   generationMetrics?: DraftGenerationMetrics;
   reviewStatus?: "draft" | "reviewing" | "approved" | "rejected";
   reviewNote?: string;
+  archivedAt?: string;
   createdAt: string;
 };
 
@@ -883,11 +884,31 @@ app.get("/feed", async (c) => {
 
 app.get("/drafts", (c) => {
   const userId = getUserId(c);
+  const includeArchived = c.req.query("includeArchived") === "true";
   const store = readStore();
   return c.json({
     code: 200,
-    data: store.drafts.filter((draft) => draft.userId === userId).sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+    data: store.drafts
+      .filter((draft) => draft.userId === userId && (includeArchived || !draft.archivedAt))
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
   });
+});
+
+app.delete("/drafts/:id", (c) => {
+  const userId = getUserId(c);
+  const draftId = c.req.param("id");
+  const store = readStore();
+  const draft = store.drafts.find((item) => item.id === draftId && item.userId === userId);
+  if (!draft) return c.json({ code: 404, message: "Draft not found" }, 404);
+
+  draft.archivedAt = new Date().toISOString();
+  addAuditLog(store, userId, "draft.archived", "draft", draft.id, {
+    topicTitle: draft.topic.title,
+    platform: draft.platform,
+  });
+  writeStore(store);
+
+  return c.json({ code: 200, data: draft });
 });
 
 app.patch("/drafts/:id/content", async (c) => {
