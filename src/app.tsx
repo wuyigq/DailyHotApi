@@ -7,6 +7,7 @@ import { prettyJSON } from "hono/pretty-json";
 import { trimTrailingSlash } from "hono/trailing-slash";
 import logger from "./utils/logger.js";
 import registry from "./registry.js";
+import workspace from "./workspace.js";
 import robotstxt from "./robots.txt.js";
 import NotFound from "./views/NotFound.js";
 import Home from "./views/Home.js";
@@ -51,6 +52,8 @@ app.use(
 
 // 主路由
 app.route("/", registry);
+// AI 热点内容工作台 MVP
+app.route("/workspace", workspace);
 
 // robots
 app.get("/robots.txt", robotstxt);
