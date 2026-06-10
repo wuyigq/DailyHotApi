@@ -19,6 +19,16 @@ type WorkspaceTopic = ListItem & {
   source: string;
   sourceTitle: string;
   sourceType: string;
+  relatedSources?: Array<{
+    source: string;
+    sourceTitle: string;
+    sourceType: string;
+    url?: string;
+    mobileUrl?: string;
+    timestamp?: number;
+  }>;
+  firstSeenAt?: number;
+  latestSeenAt?: number;
   score: number;
   matchedKeywords: string[];
   matchedCategories: string[];
@@ -222,7 +232,7 @@ const categoryWords: Record<string, string[]> = {
 };
 
 const highRiskWords = ["政治", "军事", "外交", "战争", "冲突", "事故", "通报", "警方"];
-const defaultSources = ["weibo", "zhihu", "bilibili", "douyin", "toutiao", "ithome"];
+const defaultSources = ["weibo", "zhihu", "bilibili", "douyin", "toutiao", "ithome", "baidu", "qq-news", "sina-news", "thepaper"];
 const aiLabel = "AI 辅助生成";
 
 const normalizeWords = (words: unknown): string[] => {
@@ -446,6 +456,48 @@ const scoreTopic = (
     matchedCategories,
     riskLevel,
   };
+};
+
+const topicKey = (topic: WorkspaceTopic) =>
+  topic.title
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, "")
+    .slice(0, 48);
+
+const mergeTopics = (topics: WorkspaceTopic[]) => {
+  const grouped = new Map<string, WorkspaceTopic>();
+  topics.forEach((topic) => {
+    const key = topicKey(topic);
+    const sourceInfo = {
+      source: topic.source,
+      sourceTitle: topic.sourceTitle,
+      sourceType: topic.sourceType,
+      url: topic.url,
+      mobileUrl: topic.mobileUrl,
+      timestamp: topic.timestamp,
+    };
+    const existing = grouped.get(key);
+    if (!existing) {
+      grouped.set(key, {
+        ...topic,
+        relatedSources: [sourceInfo],
+        firstSeenAt: topic.timestamp,
+        latestSeenAt: topic.timestamp,
+      });
+      return;
+    }
+
+    existing.score += topic.score;
+    existing.hot = Math.max(Number(existing.hot || 0), Number(topic.hot || 0));
+    existing.matchedKeywords = Array.from(new Set([...existing.matchedKeywords, ...topic.matchedKeywords]));
+    existing.matchedCategories = Array.from(new Set([...existing.matchedCategories, ...topic.matchedCategories]));
+    existing.relatedSources = [...(existing.relatedSources || []), sourceInfo];
+    existing.firstSeenAt = Math.min(existing.firstSeenAt || topic.timestamp || 0, topic.timestamp || existing.firstSeenAt || 0);
+    existing.latestSeenAt = Math.max(existing.latestSeenAt || topic.timestamp || 0, topic.timestamp || existing.latestSeenAt || 0);
+    if (topic.riskLevel === "high") existing.riskLevel = "high";
+    if (existing.riskLevel !== "high" && topic.riskLevel === "medium") existing.riskLevel = "medium";
+  });
+  return Array.from(grouped.values());
 };
 
 const buildDraft = (
@@ -866,10 +918,10 @@ app.get("/feed", async (c) => {
   const limit = Number(c.req.query("limit") || 60);
   const sources = preferences.sources.length ? preferences.sources : defaultSources;
   const sourceData = await Promise.all(sources.map((source) => fetchSource(source, noCache)));
-  const topics = sourceData
+  const topics = mergeTopics(sourceData
     .filter((source): source is RouterData => Boolean(source))
     .flatMap((source) => source.data.map((item) => scoreTopic(item, source, preferences)))
-    .filter((topic): topic is WorkspaceTopic => Boolean(topic))
+    .filter((topic): topic is WorkspaceTopic => Boolean(topic)))
     .sort((a, b) => b.score - a.score)
     .slice(0, limit);
 
