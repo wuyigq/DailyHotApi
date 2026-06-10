@@ -36,6 +36,7 @@ type WorkspaceDraft = {
   generationProvider?: string;
   generationModel?: string;
   generationReason?: string;
+  generationMetrics?: DraftGenerationMetrics;
   reviewStatus?: "draft" | "reviewing" | "approved" | "rejected";
   reviewNote?: string;
   createdAt: string;
@@ -62,6 +63,14 @@ type DraftGenerationResult = {
   provider: string;
   model?: string;
   reason?: string;
+  metrics: DraftGenerationMetrics;
+};
+
+type DraftGenerationMetrics = {
+  latencyMs: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
 };
 
 type PublishPackageLink = {
@@ -394,18 +403,42 @@ const buildDraftPrompt = (
   ].join("\n");
 };
 
+const estimateTokens = (content: string) => Math.max(1, Math.ceil(content.length / 2));
+
+const buildGenerationMetrics = (
+  startedAt: number,
+  prompt: string,
+  content: string,
+  usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number },
+): DraftGenerationMetrics => {
+  const promptTokens = usage?.prompt_tokens || estimateTokens(prompt);
+  const completionTokens = usage?.completion_tokens || estimateTokens(content);
+  return {
+    latencyMs: Date.now() - startedAt,
+    promptTokens,
+    completionTokens,
+    totalTokens: usage?.total_tokens || promptTokens + completionTokens,
+  };
+};
+
 const buildTemplateGeneration = (
   topic: WorkspaceTopic,
   platform: string,
   tone: WorkspacePreferences["tone"],
   persona: WorkspacePersona,
   reason = "AI provider is not configured",
-): DraftGenerationResult => ({
-  content: buildDraft(topic, platform, tone, persona),
-  mode: "template",
-  provider: "template",
-  reason,
-});
+  startedAt = Date.now(),
+): DraftGenerationResult => {
+  const content = buildDraft(topic, platform, tone, persona);
+  const prompt = buildDraftPrompt(topic, platform, tone, persona);
+  return {
+    content,
+    mode: "template",
+    provider: "template",
+    reason,
+    metrics: buildGenerationMetrics(startedAt, prompt, content),
+  };
+};
 
 const generateAiDraft = async (
   topic: WorkspaceTopic,
@@ -413,12 +446,14 @@ const generateAiDraft = async (
   tone: WorkspacePreferences["tone"],
   persona: WorkspacePersona,
 ): Promise<DraftGenerationResult> => {
+  const startedAt = Date.now();
   if (!config.AI_API_KEY || config.AI_PROVIDER === "template") {
-    return buildTemplateGeneration(topic, platform, tone, persona);
+    return buildTemplateGeneration(topic, platform, tone, persona, "AI provider is not configured", startedAt);
   }
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), config.AI_TIMEOUT);
+  const prompt = buildDraftPrompt(topic, platform, tone, persona);
 
   try {
     const response = await fetch(`${config.AI_BASE_URL.replace(/\/$/, "")}/chat/completions`, {
@@ -438,7 +473,7 @@ const generateAiDraft = async (
           },
           {
             role: "user",
-            content: buildDraftPrompt(topic, platform, tone, persona),
+            content: prompt,
           },
         ],
       }),
@@ -447,13 +482,16 @@ const generateAiDraft = async (
 
     if (!response.ok) {
       const message = await response.text();
-      return buildTemplateGeneration(topic, platform, tone, persona, `AI request failed: ${response.status} ${message.slice(0, 120)}`);
+      return buildTemplateGeneration(topic, platform, tone, persona, `AI request failed: ${response.status} ${message.slice(0, 120)}`, startedAt);
     }
 
-    const data = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
+    const data = (await response.json()) as {
+      choices?: Array<{ message?: { content?: string } }>;
+      usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+    };
     const content = data.choices?.[0]?.message?.content?.trim();
     if (!content) {
-      return buildTemplateGeneration(topic, platform, tone, persona, "AI returned empty content");
+      return buildTemplateGeneration(topic, platform, tone, persona, "AI returned empty content", startedAt);
     }
 
     return {
@@ -461,10 +499,11 @@ const generateAiDraft = async (
       mode: "ai",
       provider: config.AI_PROVIDER,
       model: config.AI_MODEL,
+      metrics: buildGenerationMetrics(startedAt, prompt, content, data.usage),
     };
   } catch (error) {
     const reason = error instanceof Error ? error.message : "AI request failed";
-    return buildTemplateGeneration(topic, platform, tone, persona, reason);
+    return buildTemplateGeneration(topic, platform, tone, persona, reason, startedAt);
   } finally {
     clearTimeout(timeout);
   }
@@ -882,6 +921,34 @@ app.get("/overview", (c) => {
     acc[status] = (acc[status] || 0) + 1;
     return acc;
   }, {});
+  const generation = drafts.reduce(
+    (acc, draft) => {
+      const mode = draft.generationMode || "template";
+      if (mode === "ai") acc.aiCount += 1;
+      if (mode === "template") acc.templateCount += 1;
+      const metrics = draft.generationMetrics;
+      if (metrics) {
+        acc.latencyMs += metrics.latencyMs || 0;
+        acc.promptTokens += metrics.promptTokens || 0;
+        acc.completionTokens += metrics.completionTokens || 0;
+        acc.totalTokens += metrics.totalTokens || 0;
+      }
+      if (draft.generationReason) {
+        acc.fallbackReasons[draft.generationReason] = (acc.fallbackReasons[draft.generationReason] || 0) + 1;
+      }
+      return acc;
+    },
+    {
+      aiCount: 0,
+      templateCount: 0,
+      latencyMs: 0,
+      promptTokens: 0,
+      completionTokens: 0,
+      totalTokens: 0,
+      fallbackReasons: {} as Record<string, number>,
+    },
+  );
+  const measuredDraftCount = drafts.filter((draft) => draft.generationMetrics).length;
 
   return c.json({
     code: 200,
@@ -892,6 +959,10 @@ app.get("/overview", (c) => {
       totals,
       engagementRate: totals.views > 0 ? Number(((totals.likes + totals.comments + totals.shares) / totals.views).toFixed(4)) : 0,
       leadRate: totals.views > 0 ? Number((totals.leads / totals.views).toFixed(4)) : 0,
+      generation: {
+        ...generation,
+        averageLatencyMs: measuredDraftCount > 0 ? Math.round(generation.latencyMs / measuredDraftCount) : 0,
+      },
     },
   });
 });
@@ -932,6 +1003,7 @@ app.post("/generate", async (c) => {
     generationProvider: generation.provider,
     generationModel: generation.model,
     generationReason: generation.reason,
+    generationMetrics: generation.metrics,
     reviewStatus: "draft",
     createdAt: new Date().toISOString(),
   };
@@ -945,6 +1017,7 @@ app.post("/generate", async (c) => {
     generationProvider: generation.provider,
     generationModel: generation.model,
     generationReason: generation.reason,
+    generationMetrics: generation.metrics,
   });
   writeStore(store);
 
