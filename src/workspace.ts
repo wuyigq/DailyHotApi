@@ -3,6 +3,7 @@ import { fileURLToPath } from "url";
 import { createHash } from "crypto";
 import fs from "fs";
 import path from "path";
+import { config } from "./config.js";
 import type { ListItem, RouterData } from "./types.js";
 
 type WorkspacePreferences = {
@@ -31,6 +32,10 @@ type WorkspaceDraft = {
   platform: string;
   tone: WorkspacePreferences["tone"];
   content: string;
+  generationMode?: "ai" | "template";
+  generationProvider?: string;
+  generationModel?: string;
+  generationReason?: string;
   reviewStatus?: "draft" | "reviewing" | "approved" | "rejected";
   reviewNote?: string;
   createdAt: string;
@@ -49,6 +54,14 @@ type WorkspacePersona = {
 type PublishCheckIssue = {
   level: "info" | "warning" | "error";
   message: string;
+};
+
+type DraftGenerationResult = {
+  content: string;
+  mode: "ai" | "template";
+  provider: string;
+  model?: string;
+  reason?: string;
 };
 
 type PublishPackageLink = {
@@ -342,6 +355,119 @@ const buildDraft = (
   }
 
   return `看到一个热榜话题：${topic.title}。\n\n我的看法是，先把事实和情绪分开。能上热榜说明它击中了大众关注点，但是否值得跟进，还要看来源、后续进展和它跟我们的关系。${viewpointLine}${personaLine}\n\n如果要发动态，我会用 ${toneLabel} 的方式表达：不抢结论，先给信息，再给观点，最后留讨论空间。\n\n来源：${topic.sourceTitle} ${sourceUrl}${riskNotice}`;
+};
+
+const platformPromptLabel = (platform: string) =>
+  ({
+    weibo: "微博短评",
+    xiaohongshu: "小红书笔记",
+    video: "短视频口播脚本",
+  })[platform] || platform;
+
+const buildDraftPrompt = (
+  topic: WorkspaceTopic,
+  platform: string,
+  tone: WorkspacePreferences["tone"],
+  persona: WorkspacePersona,
+) => {
+  const sourceUrl = topic.mobileUrl || topic.url || "";
+  return [
+    `请为一个热点内容工作台生成${platformPromptLabel(platform)}草稿。`,
+    "要求：",
+    "1. 只输出可直接发布或录制的正文，不要解释生成过程。",
+    "2. 不编造事实；必须保留来源说明。",
+    "3. 高风险话题使用克制表达，避免绝对化判断和攻击个人。",
+    "4. 保留 AI 辅助生成标识或适合平台规则的披露表达。",
+    "5. 根据平台控制篇幅：微博简洁，小红书有标题和正文，视频包含口播结构。",
+    "",
+    `热点标题：${topic.title}`,
+    `热点描述：${topic.desc || "无"}`,
+    `来源：${topic.sourceTitle} ${sourceUrl}`,
+    `匹配关键词：${topic.matchedKeywords.join("、") || "无"}`,
+    `匹配类型：${topic.matchedCategories.join("、") || "无"}`,
+    `风险等级：${topic.riskLevel}`,
+    `语气：${tone}`,
+    `创作者身份：${persona.identity}`,
+    `观点库：${persona.viewpoints.join("；") || "无"}`,
+    `表达边界：${persona.boundaries.join("；") || "事实优先"}`,
+    `禁用表达：${persona.forbiddenWords.join("；") || "无"}`,
+  ].join("\n");
+};
+
+const buildTemplateGeneration = (
+  topic: WorkspaceTopic,
+  platform: string,
+  tone: WorkspacePreferences["tone"],
+  persona: WorkspacePersona,
+  reason = "AI provider is not configured",
+): DraftGenerationResult => ({
+  content: buildDraft(topic, platform, tone, persona),
+  mode: "template",
+  provider: "template",
+  reason,
+});
+
+const generateAiDraft = async (
+  topic: WorkspaceTopic,
+  platform: string,
+  tone: WorkspacePreferences["tone"],
+  persona: WorkspacePersona,
+): Promise<DraftGenerationResult> => {
+  if (!config.AI_API_KEY || config.AI_PROVIDER === "template") {
+    return buildTemplateGeneration(topic, platform, tone, persona);
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), config.AI_TIMEOUT);
+
+  try {
+    const response = await fetch(`${config.AI_BASE_URL.replace(/\/$/, "")}/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${config.AI_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: config.AI_MODEL,
+        temperature: config.AI_TEMPERATURE,
+        messages: [
+          {
+            role: "system",
+            content:
+              "你是内容创作助手，负责把热点整理成克制、可核查、适合发布的中文草稿。不要编造事实，不要输出违规或攻击性内容。",
+          },
+          {
+            role: "user",
+            content: buildDraftPrompt(topic, platform, tone, persona),
+          },
+        ],
+      }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const message = await response.text();
+      return buildTemplateGeneration(topic, platform, tone, persona, `AI request failed: ${response.status} ${message.slice(0, 120)}`);
+    }
+
+    const data = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
+    const content = data.choices?.[0]?.message?.content?.trim();
+    if (!content) {
+      return buildTemplateGeneration(topic, platform, tone, persona, "AI returned empty content");
+    }
+
+    return {
+      content,
+      mode: "ai",
+      provider: config.AI_PROVIDER,
+      model: config.AI_MODEL,
+    };
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "AI request failed";
+    return buildTemplateGeneration(topic, platform, tone, persona, reason);
+  } finally {
+    clearTimeout(timeout);
+  }
 };
 
 const platformLimits: Record<string, number> = {
@@ -794,13 +920,18 @@ app.post("/generate", async (c) => {
   const tone = ["balanced", "sharp", "casual", "professional"].includes(body.tone)
     ? body.tone
     : preferences.tone;
+  const generation = await generateAiDraft(topic, platform, tone, persona);
   const draft: WorkspaceDraft = {
     id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
     userId,
     topic,
     platform,
     tone,
-    content: buildDraft(topic, platform, tone, persona),
+    content: generation.content,
+    generationMode: generation.mode,
+    generationProvider: generation.provider,
+    generationModel: generation.model,
+    generationReason: generation.reason,
     reviewStatus: "draft",
     createdAt: new Date().toISOString(),
   };
@@ -810,6 +941,10 @@ app.post("/generate", async (c) => {
     platform,
     topicTitle: topic.title,
     riskLevel: topic.riskLevel,
+    generationMode: generation.mode,
+    generationProvider: generation.provider,
+    generationModel: generation.model,
+    generationReason: generation.reason,
   });
   writeStore(store);
 

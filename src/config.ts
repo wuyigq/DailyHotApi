@@ -16,6 +16,12 @@ export type Config = {
   REDIS_PORT: number;
   REDIS_PASSWORD: string;
   ZHIHU_COOKIE: string;
+  AI_PROVIDER: string;
+  AI_API_KEY: string;
+  AI_BASE_URL: string;
+  AI_MODEL: string;
+  AI_TIMEOUT: number;
+  AI_TEMPERATURE: number;
 };
 
 // 验证并提取环境变量
@@ -53,4 +59,10 @@ export const config: Config = {
   REDIS_PORT: getNumericEnvVariable("REDIS_PORT", 6379),
   REDIS_PASSWORD: getEnvVariable("REDIS_PASSWORD") || "",
   ZHIHU_COOKIE: getEnvVariable("ZHIHU_COOKIE") || "",
+  AI_PROVIDER: getEnvVariable("AI_PROVIDER") || "template",
+  AI_API_KEY: getEnvVariable("AI_API_KEY") || "",
+  AI_BASE_URL: getEnvVariable("AI_BASE_URL") || "https://api.openai.com/v1",
+  AI_MODEL: getEnvVariable("AI_MODEL") || "gpt-4o-mini",
+  AI_TIMEOUT: getNumericEnvVariable("AI_TIMEOUT", 15000),
+  AI_TEMPERATURE: Number(getEnvVariable("AI_TEMPERATURE") || 0.7),
 };
