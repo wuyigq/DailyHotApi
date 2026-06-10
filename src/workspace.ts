@@ -113,6 +113,8 @@ type PublishRecord = {
   userId: string;
   draftId: string;
   platform: string;
+  accountId?: string;
+  accountName?: string;
   status: "assisted" | "published" | "failed";
   metrics?: PublishMetrics;
   publishUrl?: string;
@@ -125,9 +127,22 @@ type PublishSchedule = {
   userId: string;
   draftId: string;
   platform: string;
+  accountId?: string;
+  accountName?: string;
   scheduledAt: string;
   status: "pending" | "ready" | "published" | "skipped" | "failed";
   publishRecordId?: string;
+  note?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type PlatformAccount = {
+  id: string;
+  userId: string;
+  platform: string;
+  displayName: string;
+  profileUrl?: string;
   note?: string;
   createdAt: string;
   updatedAt: string;
@@ -167,6 +182,7 @@ type WorkspaceStore = {
   draftVersions?: DraftVersion[];
   publishRecords?: PublishRecord[];
   publishSchedules?: PublishSchedule[];
+  platformAccounts?: PlatformAccount[];
   auditLogs?: AuditLog[];
 };
 
@@ -223,6 +239,7 @@ const normalizeStore = (store: WorkspaceStore): Required<WorkspaceStore> => ({
   draftVersions: store.draftVersions || [],
   publishRecords: store.publishRecords || [],
   publishSchedules: store.publishSchedules || [],
+  platformAccounts: store.platformAccounts || [],
   auditLogs: store.auditLogs || [],
 });
 
@@ -236,6 +253,7 @@ const readStore = (): Required<WorkspaceStore> => {
       draftVersions: [],
       publishRecords: [],
       publishSchedules: [],
+      platformAccounts: [],
       auditLogs: [],
     };
   }
@@ -312,6 +330,8 @@ const createPublishRecord = (
   draft: WorkspaceDraft,
   input: {
     platform?: string;
+    accountId?: string;
+    accountName?: string;
     status?: PublishRecord["status"];
     publishUrl?: string;
     note?: string;
@@ -322,6 +342,8 @@ const createPublishRecord = (
     userId: draft.userId,
     draftId: draft.id,
     platform: String(input.platform || draft.platform),
+    accountId: input.accountId,
+    accountName: input.accountName,
     status: input.status || "assisted",
     metrics: {
       views: 0,
@@ -983,6 +1005,70 @@ app.get("/publish-records", (c) => {
   });
 });
 
+app.get("/platform-accounts", (c) => {
+  const userId = getUserId(c);
+  const store = readStore();
+  return c.json({
+    code: 200,
+    data: store.platformAccounts
+      .filter((account) => account.userId === userId)
+      .sort((a, b) => a.platform.localeCompare(b.platform) || a.displayName.localeCompare(b.displayName)),
+  });
+});
+
+app.post("/platform-accounts", async (c) => {
+  const userId = getUserId(c);
+  const body = await c.req.json().catch(() => ({}));
+  const platform = String(body.platform || "").trim();
+  const displayName = String(body.displayName || "").trim();
+  if (!platform || !displayName) {
+    return c.json({ code: 400, message: "Platform and displayName are required" }, 400);
+  }
+
+  const store = readStore();
+  const account: PlatformAccount = {
+    id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    userId,
+    platform,
+    displayName,
+    profileUrl: body.profileUrl ? String(body.profileUrl) : undefined,
+    note: body.note ? String(body.note) : undefined,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  store.platformAccounts.push(account);
+  addAuditLog(store, userId, "platform.account.created", "platformAccount", account.id, {
+    platform: account.platform,
+    displayName: account.displayName,
+  });
+  writeStore(store);
+
+  return c.json({ code: 200, data: account });
+});
+
+app.patch("/platform-accounts/:id", async (c) => {
+  const userId = getUserId(c);
+  const accountId = c.req.param("id");
+  const body = await c.req.json().catch(() => ({}));
+  const store = readStore();
+  const account = store.platformAccounts.find((item) => item.id === accountId && item.userId === userId);
+  if (!account) return c.json({ code: 404, message: "Platform account not found" }, 404);
+
+  if (body.platform !== undefined) account.platform = String(body.platform).trim() || account.platform;
+  if (body.displayName !== undefined) account.displayName = String(body.displayName).trim() || account.displayName;
+  if (body.profileUrl !== undefined) account.profileUrl = body.profileUrl ? String(body.profileUrl) : undefined;
+  if (body.note !== undefined) account.note = body.note ? String(body.note) : undefined;
+  account.updatedAt = new Date().toISOString();
+
+  addAuditLog(store, userId, "platform.account.updated", "platformAccount", account.id, {
+    platform: account.platform,
+    displayName: account.displayName,
+  });
+  writeStore(store);
+
+  return c.json({ code: 200, data: account });
+});
+
 app.get("/publish-schedules", (c) => {
   const userId = getUserId(c);
   const store = readStore();
@@ -1000,6 +1086,10 @@ app.post("/publish-schedules", async (c) => {
   const store = readStore();
   const draft = store.drafts.find((item) => item.id === body.draftId && item.userId === userId);
   if (!draft) return c.json({ code: 404, message: "Draft not found" }, 404);
+  const account = body.accountId
+    ? store.platformAccounts.find((item) => item.id === body.accountId && item.userId === userId)
+    : undefined;
+  if (body.accountId && !account) return c.json({ code: 404, message: "Platform account not found" }, 404);
 
   const scheduledAt = body.scheduledAt ? new Date(String(body.scheduledAt)) : new Date(Date.now() + 2 * 60 * 60 * 1000);
   if (Number.isNaN(scheduledAt.getTime())) {
@@ -1011,6 +1101,8 @@ app.post("/publish-schedules", async (c) => {
     userId,
     draftId: draft.id,
     platform: String(body.platform || draft.platform),
+    accountId: account?.id,
+    accountName: account?.displayName,
     scheduledAt: scheduledAt.toISOString(),
     status: "pending",
     note: body.note ? String(body.note) : "等待到点后手动发布。",
@@ -1021,6 +1113,8 @@ app.post("/publish-schedules", async (c) => {
   addAuditLog(store, userId, "publish.schedule.created", "publishSchedule", schedule.id, {
     draftId: draft.id,
     platform: schedule.platform,
+    accountId: schedule.accountId,
+    accountName: schedule.accountName,
     scheduledAt: schedule.scheduledAt,
   });
   writeStore(store);
@@ -1055,6 +1149,8 @@ app.patch("/publish-schedules/:id", async (c) => {
     if (!draft) return c.json({ code: 404, message: "Draft not found" }, 404);
     publishRecord = createPublishRecord(store, draft, {
       platform: schedule.platform,
+      accountId: schedule.accountId,
+      accountName: schedule.accountName,
       status: "published",
       note: `发布计划已完成：${schedule.note || "用户确认已发布"}`,
     });
@@ -1062,6 +1158,8 @@ app.patch("/publish-schedules/:id", async (c) => {
     addAuditLog(store, userId, "publish.recorded", "publishRecord", publishRecord.id, {
       draftId: draft.id,
       platform: publishRecord.platform,
+      accountId: publishRecord.accountId,
+      accountName: publishRecord.accountName,
       status: publishRecord.status,
       scheduleId: schedule.id,
     });
@@ -1083,9 +1181,15 @@ app.post("/publish-records", async (c) => {
   const store = readStore();
   const draft = store.drafts.find((item) => item.id === body.draftId && item.userId === userId);
   if (!draft) return c.json({ code: 404, message: "Draft not found" }, 404);
+  const account = body.accountId
+    ? store.platformAccounts.find((item) => item.id === body.accountId && item.userId === userId)
+    : undefined;
+  if (body.accountId && !account) return c.json({ code: 404, message: "Platform account not found" }, 404);
 
   const record = createPublishRecord(store, draft, {
     platform: String(body.platform || draft.platform),
+    accountId: account?.id,
+    accountName: account?.displayName,
     status: ["assisted", "published", "failed"].includes(body.status) ? body.status : "assisted",
     publishUrl: body.publishUrl ? String(body.publishUrl) : undefined,
     note: body.note ? String(body.note) : "已复制/分享到平台，等待用户手动确认发布。",
@@ -1093,6 +1197,8 @@ app.post("/publish-records", async (c) => {
   addAuditLog(store, userId, "publish.recorded", "publishRecord", record.id, {
     draftId: draft.id,
     platform: record.platform,
+    accountId: record.accountId,
+    accountName: record.accountName,
     status: record.status,
   });
   writeStore(store);
