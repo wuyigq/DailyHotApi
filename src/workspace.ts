@@ -127,6 +127,7 @@ type PublishSchedule = {
   platform: string;
   scheduledAt: string;
   status: "pending" | "ready" | "published" | "skipped" | "failed";
+  publishRecordId?: string;
   note?: string;
   createdAt: string;
   updatedAt: string;
@@ -304,6 +305,37 @@ const addDraftVersion = (
   };
   store.draftVersions.push(version);
   return version;
+};
+
+const createPublishRecord = (
+  store: Required<WorkspaceStore>,
+  draft: WorkspaceDraft,
+  input: {
+    platform?: string;
+    status?: PublishRecord["status"];
+    publishUrl?: string;
+    note?: string;
+  } = {},
+) => {
+  const record: PublishRecord = {
+    id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    userId: draft.userId,
+    draftId: draft.id,
+    platform: String(input.platform || draft.platform),
+    status: input.status || "assisted",
+    metrics: {
+      views: 0,
+      likes: 0,
+      comments: 0,
+      shares: 0,
+      leads: 0,
+    },
+    publishUrl: input.publishUrl,
+    note: input.note || "已复制/分享到平台，等待用户手动确认发布。",
+    createdAt: new Date().toISOString(),
+  };
+  store.publishRecords.push(record);
+  return record;
 };
 
 const createUserId = (email: string) =>
@@ -1003,6 +1035,7 @@ app.patch("/publish-schedules/:id", async (c) => {
   const store = readStore();
   const schedule = store.publishSchedules.find((item) => item.id === scheduleId && item.userId === userId);
   if (!schedule) return c.json({ code: 404, message: "Publish schedule not found" }, 404);
+  let publishRecord: PublishRecord | undefined;
 
   if (["pending", "ready", "published", "skipped", "failed"].includes(body.status)) {
     schedule.status = body.status;
@@ -1017,13 +1050,31 @@ app.patch("/publish-schedules/:id", async (c) => {
   if (body.note !== undefined) schedule.note = String(body.note);
   schedule.updatedAt = new Date().toISOString();
 
+  if (schedule.status === "published" && !schedule.publishRecordId) {
+    const draft = store.drafts.find((item) => item.id === schedule.draftId && item.userId === userId);
+    if (!draft) return c.json({ code: 404, message: "Draft not found" }, 404);
+    publishRecord = createPublishRecord(store, draft, {
+      platform: schedule.platform,
+      status: "published",
+      note: `发布计划已完成：${schedule.note || "用户确认已发布"}`,
+    });
+    schedule.publishRecordId = publishRecord.id;
+    addAuditLog(store, userId, "publish.recorded", "publishRecord", publishRecord.id, {
+      draftId: draft.id,
+      platform: publishRecord.platform,
+      status: publishRecord.status,
+      scheduleId: schedule.id,
+    });
+  }
+
   addAuditLog(store, userId, "publish.schedule.updated", "publishSchedule", schedule.id, {
     status: schedule.status,
     scheduledAt: schedule.scheduledAt,
+    publishRecordId: schedule.publishRecordId,
   });
   writeStore(store);
 
-  return c.json({ code: 200, data: schedule });
+  return c.json({ code: 200, data: { schedule, publishRecord } });
 });
 
 app.post("/publish-records", async (c) => {
@@ -1033,24 +1084,12 @@ app.post("/publish-records", async (c) => {
   const draft = store.drafts.find((item) => item.id === body.draftId && item.userId === userId);
   if (!draft) return c.json({ code: 404, message: "Draft not found" }, 404);
 
-  const record: PublishRecord = {
-    id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-    userId,
-    draftId: draft.id,
+  const record = createPublishRecord(store, draft, {
     platform: String(body.platform || draft.platform),
     status: ["assisted", "published", "failed"].includes(body.status) ? body.status : "assisted",
-    metrics: {
-      views: 0,
-      likes: 0,
-      comments: 0,
-      shares: 0,
-      leads: 0,
-    },
     publishUrl: body.publishUrl ? String(body.publishUrl) : undefined,
     note: body.note ? String(body.note) : "已复制/分享到平台，等待用户手动确认发布。",
-    createdAt: new Date().toISOString(),
-  };
-  store.publishRecords.push(record);
+  });
   addAuditLog(store, userId, "publish.recorded", "publishRecord", record.id, {
     draftId: draft.id,
     platform: record.platform,
