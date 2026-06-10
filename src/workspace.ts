@@ -42,6 +42,15 @@ type WorkspaceDraft = {
   createdAt: string;
 };
 
+type DraftVersion = {
+  id: string;
+  userId: string;
+  draftId: string;
+  content: string;
+  note: string;
+  createdAt: string;
+};
+
 type WorkspacePersona = {
   userId: string;
   displayName: string;
@@ -142,6 +151,7 @@ type WorkspaceStore = {
   preferences: Record<string, WorkspacePreferences>;
   personas?: Record<string, WorkspacePersona>;
   drafts: WorkspaceDraft[];
+  draftVersions?: DraftVersion[];
   publishRecords?: PublishRecord[];
   auditLogs?: AuditLog[];
 };
@@ -196,13 +206,14 @@ const normalizeStore = (store: WorkspaceStore): Required<WorkspaceStore> => ({
   preferences: store.preferences || {},
   personas: store.personas || {},
   drafts: store.drafts || [],
+  draftVersions: store.draftVersions || [],
   publishRecords: store.publishRecords || [],
   auditLogs: store.auditLogs || [],
 });
 
 const readStore = (): Required<WorkspaceStore> => {
   if (!fs.existsSync(storePath)) {
-    return { users: {}, preferences: {}, personas: {}, drafts: [], publishRecords: [], auditLogs: [] };
+    return { users: {}, preferences: {}, personas: {}, drafts: [], draftVersions: [], publishRecords: [], auditLogs: [] };
   }
   return normalizeStore(JSON.parse(fs.readFileSync(storePath, "utf-8")) as WorkspaceStore);
 };
@@ -253,6 +264,23 @@ const addAuditLog = (
     detail,
     createdAt: new Date().toISOString(),
   });
+};
+
+const addDraftVersion = (
+  store: Required<WorkspaceStore>,
+  draft: WorkspaceDraft,
+  note: string,
+) => {
+  const version: DraftVersion = {
+    id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    userId: draft.userId,
+    draftId: draft.id,
+    content: draft.content,
+    note,
+    createdAt: new Date().toISOString(),
+  };
+  store.draftVersions.push(version);
+  return version;
 };
 
 const createUserId = (email: string) =>
@@ -771,6 +799,67 @@ app.get("/drafts", (c) => {
   });
 });
 
+app.patch("/drafts/:id/content", async (c) => {
+  const userId = getUserId(c);
+  const draftId = c.req.param("id");
+  const body = await c.req.json().catch(() => ({}));
+  const content = String(body.content || "").trim();
+  if (!content) return c.json({ code: 400, message: "Content is required" }, 400);
+
+  const store = readStore();
+  const draft = store.drafts.find((item) => item.id === draftId && item.userId === userId);
+  if (!draft) return c.json({ code: 404, message: "Draft not found" }, 404);
+
+  draft.content = content;
+  const version = addDraftVersion(store, draft, body.note ? String(body.note) : "手动保存草稿");
+  addAuditLog(store, userId, "draft.content.updated", "draft", draft.id, {
+    versionId: version.id,
+    length: content.length,
+  });
+  writeStore(store);
+
+  return c.json({ code: 200, data: { draft, version } });
+});
+
+app.get("/drafts/:id/versions", (c) => {
+  const userId = getUserId(c);
+  const draftId = c.req.param("id");
+  const store = readStore();
+  const draft = store.drafts.find((item) => item.id === draftId && item.userId === userId);
+  if (!draft) return c.json({ code: 404, message: "Draft not found" }, 404);
+
+  return c.json({
+    code: 200,
+    data: store.draftVersions
+      .filter((version) => version.draftId === draftId && version.userId === userId)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+  });
+});
+
+app.post("/drafts/:id/versions/:versionId/restore", (c) => {
+  const userId = getUserId(c);
+  const draftId = c.req.param("id");
+  const versionId = c.req.param("versionId");
+  const store = readStore();
+  const draft = store.drafts.find((item) => item.id === draftId && item.userId === userId);
+  if (!draft) return c.json({ code: 404, message: "Draft not found" }, 404);
+
+  const version = store.draftVersions.find(
+    (item) => item.id === versionId && item.draftId === draftId && item.userId === userId,
+  );
+  if (!version) return c.json({ code: 404, message: "Draft version not found" }, 404);
+
+  draft.content = version.content;
+  const restoredVersion = addDraftVersion(store, draft, `恢复版本：${version.id}`);
+  addAuditLog(store, userId, "draft.version.restored", "draft", draft.id, {
+    restoredFrom: version.id,
+    versionId: restoredVersion.id,
+  });
+  writeStore(store);
+
+  return c.json({ code: 200, data: { draft, version: restoredVersion } });
+});
+
 app.patch("/drafts/:id/review", async (c) => {
   const userId = getUserId(c);
   const draftId = c.req.param("id");
@@ -1009,6 +1098,7 @@ app.post("/generate", async (c) => {
   };
   const store = readStore();
   store.drafts.push(draft);
+  const version = addDraftVersion(store, draft, "初始生成");
   addAuditLog(store, userId, "draft.generated", "draft", draft.id, {
     platform,
     topicTitle: topic.title,
@@ -1018,6 +1108,7 @@ app.post("/generate", async (c) => {
     generationModel: generation.model,
     generationReason: generation.reason,
     generationMetrics: generation.metrics,
+    versionId: version.id,
   });
   writeStore(store);
 
