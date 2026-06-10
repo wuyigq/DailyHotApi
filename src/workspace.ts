@@ -1,5 +1,6 @@
 import { Hono, type Context } from "hono";
 import { fileURLToPath } from "url";
+import { createHash } from "crypto";
 import fs from "fs";
 import path from "path";
 import type { ListItem, RouterData } from "./types.js";
@@ -80,7 +81,16 @@ type AuditLog = {
   createdAt: string;
 };
 
+type WorkspaceUser = {
+  id: string;
+  email: string;
+  name: string;
+  createdAt: string;
+  lastLoginAt: string;
+};
+
 type WorkspaceStore = {
+  users?: Record<string, WorkspaceUser>;
   preferences: Record<string, WorkspacePreferences>;
   personas?: Record<string, WorkspacePersona>;
   drafts: WorkspaceDraft[];
@@ -134,6 +144,7 @@ const getUserId = (c: Context) =>
   c.req.header("x-user-id") || c.req.query("userId") || "local-user";
 
 const normalizeStore = (store: WorkspaceStore): Required<WorkspaceStore> => ({
+  users: store.users || {},
   preferences: store.preferences || {},
   personas: store.personas || {},
   drafts: store.drafts || [],
@@ -143,7 +154,7 @@ const normalizeStore = (store: WorkspaceStore): Required<WorkspaceStore> => ({
 
 const readStore = (): Required<WorkspaceStore> => {
   if (!fs.existsSync(storePath)) {
-    return { preferences: {}, personas: {}, drafts: [], publishRecords: [], auditLogs: [] };
+    return { users: {}, preferences: {}, personas: {}, drafts: [], publishRecords: [], auditLogs: [] };
   }
   return normalizeStore(JSON.parse(fs.readFileSync(storePath, "utf-8")) as WorkspaceStore);
 };
@@ -194,6 +205,27 @@ const addAuditLog = (
     detail,
     createdAt: new Date().toISOString(),
   });
+};
+
+const createUserId = (email: string) =>
+  `user-${createHash("sha256").update(email.toLowerCase()).digest("hex").slice(0, 16)}`;
+
+const upsertUser = (email: string, name?: string) => {
+  const normalizedEmail = email.trim().toLowerCase();
+  const id = createUserId(normalizedEmail);
+  const store = readStore();
+  const existingUser = store.users[id];
+  const user: WorkspaceUser = {
+    id,
+    email: normalizedEmail,
+    name: name?.trim() || existingUser?.name || normalizedEmail.split("@")[0],
+    createdAt: existingUser?.createdAt || new Date().toISOString(),
+    lastLoginAt: new Date().toISOString(),
+  };
+  store.users[id] = user;
+  addAuditLog(store, id, "user.login", "user", id, { email: normalizedEmail });
+  writeStore(store);
+  return user;
 };
 
 const createRouteContext = (params: Record<string, string> = {}) => ({
@@ -325,6 +357,30 @@ const checkDraft = (draft: WorkspaceDraft, content: string, persona: WorkspacePe
     length: content.length,
   };
 };
+
+app.post("/auth/login", async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const email = String(body.email || "").trim();
+  const name = body.name ? String(body.name) : undefined;
+  if (!email || !email.includes("@")) {
+    return c.json({ code: 400, message: "Valid email is required" }, 400);
+  }
+  const user = upsertUser(email, name);
+  return c.json({ code: 200, data: user });
+});
+
+app.get("/auth/me", (c) => {
+  const userId = getUserId(c);
+  const store = readStore();
+  const user = store.users[userId] || {
+    id: userId,
+    email: "",
+    name: userId === "local-user" ? "本地默认用户" : userId,
+    createdAt: new Date().toISOString(),
+    lastLoginAt: new Date().toISOString(),
+  };
+  return c.json({ code: 200, data: user });
+});
 
 app.get("/preferences", (c) => {
   const userId = getUserId(c);
