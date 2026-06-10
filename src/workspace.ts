@@ -222,6 +222,7 @@ const categoryWords: Record<string, string[]> = {
 
 const highRiskWords = ["政治", "军事", "外交", "战争", "冲突", "事故", "通报", "警方"];
 const defaultSources = ["weibo", "zhihu", "bilibili", "douyin", "toutiao", "ithome"];
+const aiLabel = "AI 辅助生成";
 
 const normalizeWords = (words: unknown): string[] => {
   if (!Array.isArray(words)) return [];
@@ -401,6 +402,16 @@ const includesAny = (content: string, words: string[]) => {
   return words.filter((word) => normalized.includes(word.toLowerCase()));
 };
 
+const ensureAiLabel = (content: string) =>
+  content.includes(aiLabel) ? content : `${content.trim()}\n\n${aiLabel}`;
+
+const getPublishBlockReason = (draft: WorkspaceDraft) => {
+  if (draft.topic.riskLevel === "high" && draft.reviewStatus !== "approved") {
+    return "高风险草稿必须审核通过后才能生成发布包、加入计划或记录发布。";
+  }
+  return "";
+};
+
 const scoreTopic = (
   item: ListItem,
   source: RouterData,
@@ -534,7 +545,7 @@ const buildTemplateGeneration = (
   reason = "AI provider is not configured",
   startedAt = Date.now(),
 ): DraftGenerationResult => {
-  const content = buildDraft(topic, platform, tone, persona);
+  const content = ensureAiLabel(buildDraft(topic, platform, tone, persona));
   const prompt = buildDraftPrompt(topic, platform, tone, persona);
   return {
     content,
@@ -594,10 +605,11 @@ const generateAiDraft = async (
       choices?: Array<{ message?: { content?: string } }>;
       usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
     };
-    const content = data.choices?.[0]?.message?.content?.trim();
-    if (!content) {
+    const rawContent = data.choices?.[0]?.message?.content?.trim();
+    if (!rawContent) {
       return buildTemplateGeneration(topic, platform, tone, persona, "AI returned empty content", startedAt);
     }
+    const content = ensureAiLabel(rawContent);
 
     return {
       content,
@@ -741,8 +753,10 @@ const checkDraft = (draft: WorkspaceDraft, content: string, persona: WorkspacePe
   if (!content.includes("来源：")) {
     issues.push({ level: "error", message: "缺少来源标注，发布前需要保留热点来源。" });
   }
-  if (draft.topic.riskLevel === "high") {
-    issues.push({ level: "warning", message: "该热点为高风险话题，建议二次核实并避免绝对化判断。" });
+  if (draft.topic.riskLevel === "high" && draft.reviewStatus !== "approved") {
+    issues.push({ level: "error", message: "该热点为高风险话题，必须审核通过后才能发布。" });
+  } else if (draft.topic.riskLevel === "high") {
+    issues.push({ level: "warning", message: "该热点为高风险话题，发布前仍建议二次核实并避免绝对化判断。" });
   }
   if (forbiddenHits.length > 0) {
     issues.push({ level: "error", message: `命中人设禁用表达：${forbiddenHits.join("、")}` });
@@ -750,8 +764,8 @@ const checkDraft = (draft: WorkspaceDraft, content: string, persona: WorkspacePe
   if (content.length > limit) {
     issues.push({ level: "warning", message: `当前内容 ${content.length} 字，超过 ${draft.platform} 建议长度 ${limit} 字。` });
   }
-  if (!content.includes("AI") && !content.includes("辅助生成")) {
-    issues.push({ level: "info", message: "建议按平台规则保留 AI 辅助生成标识。" });
+  if (!content.includes(aiLabel)) {
+    issues.push({ level: "error", message: `缺少「${aiLabel}」标识。` });
   }
 
   return {
@@ -983,6 +997,15 @@ app.get("/drafts/:id/publish-package", (c) => {
   const store = readStore();
   const draft = store.drafts.find((item) => item.id === draftId && item.userId === userId);
   if (!draft) return c.json({ code: 404, message: "Draft not found" }, 404);
+  const blockReason = getPublishBlockReason(draft);
+  if (blockReason) {
+    addAuditLog(store, userId, "publish.blocked", "draft", draft.id, {
+      reason: blockReason,
+      action: "publish.package",
+    });
+    writeStore(store);
+    return c.json({ code: 409, message: blockReason }, 409);
+  }
 
   const publishPackage = buildPublishPackage(draft);
   addAuditLog(store, userId, "publish.package.generated", "draft", draft.id, {
@@ -1086,6 +1109,15 @@ app.post("/publish-schedules", async (c) => {
   const store = readStore();
   const draft = store.drafts.find((item) => item.id === body.draftId && item.userId === userId);
   if (!draft) return c.json({ code: 404, message: "Draft not found" }, 404);
+  const blockReason = getPublishBlockReason(draft);
+  if (blockReason) {
+    addAuditLog(store, userId, "publish.blocked", "draft", draft.id, {
+      reason: blockReason,
+      action: "publish.schedule",
+    });
+    writeStore(store);
+    return c.json({ code: 409, message: blockReason }, 409);
+  }
   const account = body.accountId
     ? store.platformAccounts.find((item) => item.id === body.accountId && item.userId === userId)
     : undefined;
@@ -1147,6 +1179,16 @@ app.patch("/publish-schedules/:id", async (c) => {
   if (schedule.status === "published" && !schedule.publishRecordId) {
     const draft = store.drafts.find((item) => item.id === schedule.draftId && item.userId === userId);
     if (!draft) return c.json({ code: 404, message: "Draft not found" }, 404);
+    const blockReason = getPublishBlockReason(draft);
+    if (blockReason) {
+      addAuditLog(store, userId, "publish.blocked", "draft", draft.id, {
+        reason: blockReason,
+        action: "publish.schedule.complete",
+        scheduleId: schedule.id,
+      });
+      writeStore(store);
+      return c.json({ code: 409, message: blockReason }, 409);
+    }
     publishRecord = createPublishRecord(store, draft, {
       platform: schedule.platform,
       accountId: schedule.accountId,
@@ -1181,6 +1223,15 @@ app.post("/publish-records", async (c) => {
   const store = readStore();
   const draft = store.drafts.find((item) => item.id === body.draftId && item.userId === userId);
   if (!draft) return c.json({ code: 404, message: "Draft not found" }, 404);
+  const blockReason = getPublishBlockReason(draft);
+  if (blockReason) {
+    addAuditLog(store, userId, "publish.blocked", "draft", draft.id, {
+      reason: blockReason,
+      action: "publish.record",
+    });
+    writeStore(store);
+    return c.json({ code: 409, message: blockReason }, 409);
+  }
   const account = body.accountId
     ? store.platformAccounts.find((item) => item.id === body.accountId && item.userId === userId)
     : undefined;
@@ -1298,6 +1349,77 @@ app.get("/overview", (c) => {
         ...generation,
         averageLatencyMs: measuredDraftCount > 0 ? Math.round(generation.latencyMs / measuredDraftCount) : 0,
       },
+    },
+  });
+});
+
+app.get("/insights", (c) => {
+  const userId = getUserId(c);
+  const store = readStore();
+  const records = store.publishRecords.filter((record) => record.userId === userId);
+  const schedules = store.publishSchedules.filter((schedule) => schedule.userId === userId);
+  const drafts = store.drafts.filter((draft) => draft.userId === userId);
+
+  const platformStats = records.reduce<Record<string, { count: number; views: number; engagement: number; leads: number }>>(
+    (acc, record) => {
+      const metrics = record.metrics || { views: 0, likes: 0, comments: 0, shares: 0, leads: 0 };
+      const item = acc[record.platform] || { count: 0, views: 0, engagement: 0, leads: 0 };
+      item.count += 1;
+      item.views += metrics.views;
+      item.engagement += metrics.likes + metrics.comments + metrics.shares;
+      item.leads += metrics.leads;
+      acc[record.platform] = item;
+      return acc;
+    },
+    {},
+  );
+  const rankedPlatforms = Object.entries(platformStats)
+    .map(([platform, stats]) => ({
+      platform,
+      ...stats,
+      engagementRate: stats.views > 0 ? Number((stats.engagement / stats.views).toFixed(4)) : 0,
+      leadRate: stats.views > 0 ? Number((stats.leads / stats.views).toFixed(4)) : 0,
+    }))
+    .sort((a, b) => b.leadRate - a.leadRate || b.engagementRate - a.engagementRate || b.views - a.views);
+  const bestRecord = records
+    .map((record) => {
+      const metrics = record.metrics || { views: 0, likes: 0, comments: 0, shares: 0, leads: 0 };
+      return {
+        ...record,
+        score: metrics.leads * 100 + (metrics.likes + metrics.comments + metrics.shares) * 10 + metrics.views,
+      };
+    })
+    .sort((a, b) => b.score - a.score)[0];
+  const pendingSchedules = schedules.filter((schedule) => ["pending", "ready"].includes(schedule.status));
+  const highRiskDrafts = drafts.filter((draft) => draft.topic.riskLevel === "high" && draft.reviewStatus !== "approved");
+  const unmeasuredRecords = records.filter((record) => {
+    const metrics = record.metrics || { views: 0, likes: 0, comments: 0, shares: 0, leads: 0 };
+    return metrics.views + metrics.likes + metrics.comments + metrics.shares + metrics.leads === 0;
+  });
+  const suggestions = [
+    rankedPlatforms[0]
+      ? `优先复用 ${rankedPlatforms[0].platform} 的内容结构：当前线索率 ${rankedPlatforms[0].leadRate}，互动率 ${rankedPlatforms[0].engagementRate}。`
+      : "还没有可复盘的发布数据，先发布 3 条以上内容并回填基础指标。",
+    pendingSchedules.length > 0
+      ? `当前有 ${pendingSchedules.length} 条待发布计划，发布前先完成来源和风险复核。`
+      : "暂无待发布计划，可以从高分热点中补充未来 2 小时的发布排程。",
+    unmeasuredRecords.length > 0
+      ? `有 ${unmeasuredRecords.length} 条发布记录未回填数据，建议优先补齐曝光、互动和线索。`
+      : "发布记录均已回填基础指标，可以开始比较平台和发布时间表现。",
+    highRiskDrafts.length > 0
+      ? `有 ${highRiskDrafts.length} 条高风险草稿未审核通过，暂不建议进入发布计划。`
+      : "当前没有未审核的高风险草稿。",
+  ];
+
+  return c.json({
+    code: 200,
+    data: {
+      rankedPlatforms,
+      bestRecord: bestRecord || null,
+      pendingScheduleCount: pendingSchedules.length,
+      unmeasuredRecordCount: unmeasuredRecords.length,
+      highRiskDraftCount: highRiskDrafts.length,
+      suggestions,
     },
   });
 });

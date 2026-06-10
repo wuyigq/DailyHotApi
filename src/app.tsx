@@ -35,8 +35,8 @@ app.use(
       const isSame = config.ALLOWED_HOST && origin.endsWith(config.ALLOWED_HOST);
       return isSame ? origin : config.ALLOWED_DOMAIN;
     },
-    allowMethods: ["POST", "GET", "OPTIONS"],
-    allowHeaders: ["X-Custom-Header", "Upgrade-Insecure-Requests"],
+    allowMethods: ["POST", "GET", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowHeaders: ["Content-Type", "X-User-Id", "X-Custom-Header", "Upgrade-Insecure-Requests"],
     credentials: true,
   }),
 );
