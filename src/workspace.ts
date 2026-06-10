@@ -120,6 +120,18 @@ type PublishRecord = {
   createdAt: string;
 };
 
+type PublishSchedule = {
+  id: string;
+  userId: string;
+  draftId: string;
+  platform: string;
+  scheduledAt: string;
+  status: "pending" | "ready" | "published" | "skipped" | "failed";
+  note?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
 type PublishMetrics = {
   views: number;
   likes: number;
@@ -153,6 +165,7 @@ type WorkspaceStore = {
   drafts: WorkspaceDraft[];
   draftVersions?: DraftVersion[];
   publishRecords?: PublishRecord[];
+  publishSchedules?: PublishSchedule[];
   auditLogs?: AuditLog[];
 };
 
@@ -208,12 +221,22 @@ const normalizeStore = (store: WorkspaceStore): Required<WorkspaceStore> => ({
   drafts: store.drafts || [],
   draftVersions: store.draftVersions || [],
   publishRecords: store.publishRecords || [],
+  publishSchedules: store.publishSchedules || [],
   auditLogs: store.auditLogs || [],
 });
 
 const readStore = (): Required<WorkspaceStore> => {
   if (!fs.existsSync(storePath)) {
-    return { users: {}, preferences: {}, personas: {}, drafts: [], draftVersions: [], publishRecords: [], auditLogs: [] };
+    return {
+      users: {},
+      preferences: {},
+      personas: {},
+      drafts: [],
+      draftVersions: [],
+      publishRecords: [],
+      publishSchedules: [],
+      auditLogs: [],
+    };
   }
   return normalizeStore(JSON.parse(fs.readFileSync(storePath, "utf-8")) as WorkspaceStore);
 };
@@ -928,6 +951,81 @@ app.get("/publish-records", (c) => {
   });
 });
 
+app.get("/publish-schedules", (c) => {
+  const userId = getUserId(c);
+  const store = readStore();
+  return c.json({
+    code: 200,
+    data: store.publishSchedules
+      .filter((schedule) => schedule.userId === userId)
+      .sort((a, b) => a.scheduledAt.localeCompare(b.scheduledAt)),
+  });
+});
+
+app.post("/publish-schedules", async (c) => {
+  const userId = getUserId(c);
+  const body = await c.req.json().catch(() => ({}));
+  const store = readStore();
+  const draft = store.drafts.find((item) => item.id === body.draftId && item.userId === userId);
+  if (!draft) return c.json({ code: 404, message: "Draft not found" }, 404);
+
+  const scheduledAt = body.scheduledAt ? new Date(String(body.scheduledAt)) : new Date(Date.now() + 2 * 60 * 60 * 1000);
+  if (Number.isNaN(scheduledAt.getTime())) {
+    return c.json({ code: 400, message: "Invalid scheduledAt" }, 400);
+  }
+
+  const schedule: PublishSchedule = {
+    id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    userId,
+    draftId: draft.id,
+    platform: String(body.platform || draft.platform),
+    scheduledAt: scheduledAt.toISOString(),
+    status: "pending",
+    note: body.note ? String(body.note) : "等待到点后手动发布。",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  store.publishSchedules.push(schedule);
+  addAuditLog(store, userId, "publish.schedule.created", "publishSchedule", schedule.id, {
+    draftId: draft.id,
+    platform: schedule.platform,
+    scheduledAt: schedule.scheduledAt,
+  });
+  writeStore(store);
+
+  return c.json({ code: 200, data: schedule });
+});
+
+app.patch("/publish-schedules/:id", async (c) => {
+  const userId = getUserId(c);
+  const scheduleId = c.req.param("id");
+  const body = await c.req.json().catch(() => ({}));
+  const store = readStore();
+  const schedule = store.publishSchedules.find((item) => item.id === scheduleId && item.userId === userId);
+  if (!schedule) return c.json({ code: 404, message: "Publish schedule not found" }, 404);
+
+  if (["pending", "ready", "published", "skipped", "failed"].includes(body.status)) {
+    schedule.status = body.status;
+  }
+  if (body.scheduledAt) {
+    const scheduledAt = new Date(String(body.scheduledAt));
+    if (Number.isNaN(scheduledAt.getTime())) {
+      return c.json({ code: 400, message: "Invalid scheduledAt" }, 400);
+    }
+    schedule.scheduledAt = scheduledAt.toISOString();
+  }
+  if (body.note !== undefined) schedule.note = String(body.note);
+  schedule.updatedAt = new Date().toISOString();
+
+  addAuditLog(store, userId, "publish.schedule.updated", "publishSchedule", schedule.id, {
+    status: schedule.status,
+    scheduledAt: schedule.scheduledAt,
+  });
+  writeStore(store);
+
+  return c.json({ code: 200, data: schedule });
+});
+
 app.post("/publish-records", async (c) => {
   const userId = getUserId(c);
   const body = await c.req.json().catch(() => ({}));
@@ -993,6 +1091,7 @@ app.get("/overview", (c) => {
   const store = readStore();
   const drafts = store.drafts.filter((draft) => draft.userId === userId);
   const records = store.publishRecords.filter((record) => record.userId === userId);
+  const schedules = store.publishSchedules.filter((schedule) => schedule.userId === userId);
   const totals = records.reduce(
     (acc, record) => {
       const metrics = record.metrics || { views: 0, likes: 0, comments: 0, shares: 0, leads: 0 };
@@ -1044,6 +1143,8 @@ app.get("/overview", (c) => {
     data: {
       draftCount: drafts.length,
       publishCount: records.length,
+      scheduleCount: schedules.length,
+      pendingScheduleCount: schedules.filter((schedule) => ["pending", "ready"].includes(schedule.status)).length,
       reviewStatus,
       totals,
       engagementRate: totals.views > 0 ? Number(((totals.likes + totals.comments + totals.shares) / totals.views).toFixed(4)) : 0,
