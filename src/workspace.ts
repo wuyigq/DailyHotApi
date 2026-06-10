@@ -532,6 +532,14 @@ const buildDraft = (
     return `口播标题：${topic.title}\n\n开场 3 秒：今天这个热点很适合聊，但不要只看热闹。\n\n主体结构：\n1. 先用一句话讲清楚事件：${topic.title}。\n2. 解释它为什么会冲上热榜：热度来自 ${topic.sourceTitle}，并且和 ${[...topic.matchedKeywords, ...topic.matchedCategories].join("、") || "大众讨论"} 有关。\n3. 给出你的观点：我的判断是，真正值得关注的是后续影响，而不是情绪化转发。${viewpointLine}${personaLine}\n4. 留一个互动问题：你觉得这件事会持续发酵吗？\n\n字幕关键词：热点、观点、影响、讨论\n来源：${sourceUrl}${riskNotice}`;
   }
 
+  if (platform === "article") {
+    return `标题：${topic.title}背后，真正值得关注的变化\n\n开头：\n今天这个话题冲上热榜：${topic.title}。\n\n它不只是一个热闹事件，更像是一个观察窗口。我们可以先把事实、情绪和可能影响拆开看：第一，事件本身来自 ${topic.sourceTitle}；第二，它触发讨论的原因和 ${[...topic.matchedKeywords, ...topic.matchedCategories].join("、") || "公共关注"} 有关；第三，后续是否值得跟进，要看是否出现更多可靠来源。${viewpointLine}${personaLine}\n\n建议正文结构：\n1. 发生了什么。\n2. 为什么会被关注。\n3. 对普通人或行业有什么影响。\n4. 我们应该怎样更稳妥地判断。\n\n来源：${topic.sourceTitle} ${sourceUrl}${riskNotice}`;
+  }
+
+  if (platform === "moments") {
+    return `今天看到一个值得聊的话题：${topic.title}。\n\n我比较在意的不是情绪化站队，而是这件事背后会不会影响我们接下来的判断。先保留来源，后续如果有更多信息再更新看法。${viewpointLine}${personaLine}\n\n来源：${topic.sourceTitle} ${sourceUrl}${riskNotice}`;
+  }
+
   return `看到一个热榜话题：${topic.title}。\n\n我的看法是，先把事实和情绪分开。能上热榜说明它击中了大众关注点，但是否值得跟进，还要看来源、后续进展和它跟我们的关系。${viewpointLine}${personaLine}\n\n如果要发动态，我会用 ${toneLabel} 的方式表达：不抢结论，先给信息，再给观点，最后留讨论空间。\n\n来源：${topic.sourceTitle} ${sourceUrl}${riskNotice}`;
 };
 
@@ -539,6 +547,8 @@ const platformPromptLabel = (platform: string) =>
   ({
     weibo: "微博短评",
     xiaohongshu: "小红书笔记",
+    article: "公众号开头",
+    moments: "朋友圈动态",
     video: "短视频口播脚本",
   })[platform] || platform;
 
@@ -682,12 +692,16 @@ const generateAiDraft = async (
 const platformLimits: Record<string, number> = {
   weibo: 2000,
   xiaohongshu: 1000,
+  article: 3000,
+  moments: 800,
   video: 1200,
 };
 
 const platformNames: Record<string, string> = {
   weibo: "微博短评",
   xiaohongshu: "小红书笔记",
+  article: "公众号开头",
+  moments: "朋友圈动态",
   video: "视频口播",
 };
 
@@ -770,6 +784,56 @@ const buildPublishPackage = (draft: WorkspaceDraft): PublishPackage => {
       files: [
         { filename: `${draft.id}-script.txt`, mimeType: "text/plain;charset=utf-8", content: draft.content },
         { filename: `${draft.id}-subtitle.txt`, mimeType: "text/plain;charset=utf-8", content: subtitleText },
+      ],
+    };
+  }
+
+  if (draft.platform === "article") {
+    const copyText = `${title}\n\n${draft.content}\n\n${tagText}${sourceLine}${riskLine}`;
+    return {
+      draftId: draft.id,
+      platform: draft.platform,
+      platformName: platformNames[draft.platform],
+      title,
+      content: draft.content,
+      hashtags,
+      copyText,
+      mobileShareText: copyText,
+      checklist: [
+        "开头保留来源和事实边界，不把未经证实的信息写成结论。",
+        "正文继续补充可靠来源、引用和案例后再发布。",
+        "标题避免夸大，应和正文观点一致。",
+      ],
+      deeplinks: [
+        { label: "打开公众号平台", url: "https://mp.weixin.qq.com/" },
+      ],
+      files: [
+        { filename: `${draft.id}-article.txt`, mimeType: "text/plain;charset=utf-8", content: copyText },
+      ],
+    };
+  }
+
+  if (draft.platform === "moments") {
+    const copyText = `${draft.content}\n\n${tagText}${sourceLine}${riskLine}`;
+    return {
+      draftId: draft.id,
+      platform: draft.platform,
+      platformName: platformNames[draft.platform],
+      title,
+      content: draft.content,
+      hashtags,
+      copyText,
+      mobileShareText: copyText,
+      checklist: [
+        "朋友圈适合轻量表达，避免长篇争议判断。",
+        "保留来源说明，必要时只发给合适分组。",
+        "高风险话题先审核再发布。",
+      ],
+      deeplinks: [
+        { label: "打开微信网页版", url: "https://wx.qq.com/" },
+      ],
+      files: [
+        { filename: `${draft.id}-moments.txt`, mimeType: "text/plain;charset=utf-8", content: copyText },
       ],
     };
   }
