@@ -31,6 +31,11 @@ app.use(
   cors({
     // 可写为数组
     origin: (origin) => {
+      if (!origin) return config.ALLOWED_DOMAIN;
+      // 如果允许任何域名，则动态返回请求源，以支持 credentials 凭证模式
+      if (config.ALLOWED_DOMAIN === "*") {
+        return origin;
+      }
       // 是否指定域名
       const isSame = config.ALLOWED_HOST && origin.endsWith(config.ALLOWED_HOST);
       return isSame ? origin : config.ALLOWED_DOMAIN;
