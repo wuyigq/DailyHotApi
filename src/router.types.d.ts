@@ -81,16 +81,17 @@ export type RouterType = {
     };
   };
   weibo: {
-    mid: string;
-    itemid: string;
-    desc: string;
-    scheme: string;
     word: string;
-    word_scheme: string;
-    note: string;
-    flag_desc: string;
-    num: number;
-    onboard_time: number;
+    word_scheme?: string;
+    note?: string;
+    num?: number;
+    flag_desc?: string;
+    rank?: number;
+    mid?: string;
+    itemid?: string;
+    desc?: string;
+    scheme?: string;
+    onboard_time?: number;
   };
   zhihu: {
     target: {

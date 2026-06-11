@@ -22,10 +22,15 @@ const getDyCookies = async () => {
   try {
     const cookisUrl = "https://www.douyin.com/passport/general/login_guiding_strategy/?aid=6383";
     const { data } = await get({ url: cookisUrl, originaInfo: true });
-    const pattern = /passport_csrf_token=(.*); Path/s;
-    const matchResult = data.headers["set-cookie"][0].match(pattern);
-    const cookieData = matchResult[1];
-    return cookieData;
+    const setCookie = data?.headers?.["set-cookie"];
+    if (Array.isArray(setCookie) && setCookie.length > 0) {
+      const pattern = /passport_csrf_token=(.*?);/s;
+      const matchResult = setCookie[0].match(pattern);
+      if (matchResult && matchResult[1]) {
+        return matchResult[1];
+      }
+    }
+    return undefined;
   } catch (error) {
     console.error("获取抖音 Cookie 出错" + error);
     return undefined;

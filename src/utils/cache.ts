@@ -27,8 +27,14 @@ const redis = new Redis({
   port: config.REDIS_PORT,
   password: config.REDIS_PASSWORD,
   maxRetriesPerRequest: 5,
-  // 重试策略：最小延迟 50ms，最大延迟 2s
-  retryStrategy: (times) => Math.min(times * 50, 2000),
+  // 重试策略：若重试次数大于 3 次，停止自动重试连接并触发 end 事件，避免在本地无 Redis 时引发无限报错
+  retryStrategy: (times) => {
+    if (times > 3) {
+      logger.warn("📦 [Redis] Max connection retries reached. Disabling Redis.");
+      return null;
+    }
+    return Math.min(times * 50, 2000);
+  },
   // 仅在第一次建立连接
   lazyConnect: true,
 });
@@ -40,29 +46,36 @@ let isRedisTried: boolean = false;
 // Redis 连接状态
 const ensureRedisConnection = async () => {
   if (isRedisTried) return;
+  isRedisTried = true;
   try {
-    if (redis.status !== "ready" && redis.status !== "connecting") await redis.connect();
-    isRedisAvailable = true;
-    isRedisTried = true;
-    logger.info("📦 [Redis] connected successfully.");
+    if (redis.status !== "ready" && redis.status !== "connecting") {
+      // 异步连接，不阻塞 API 的首次请求，若连接成功由 ready 事件监听并激活 Redis 缓存
+      redis.connect().catch(() => {});
+    }
   } catch (error) {
-    isRedisAvailable = false;
-    isRedisTried = true;
-    logger.error(
-      `📦 [Redis] connection failed: ${error instanceof Error ? error.message : "Unknown error"}`,
-    );
+    // 忽略异常
   }
 };
 
 // Redis 事件监听
+redis.on("ready", () => {
+  isRedisAvailable = true;
+  logger.info("📦 [Redis] connected successfully.");
+});
+
 redis.on("error", (err) => {
-  if (!isRedisTried) {
-    isRedisAvailable = false;
+  // 如果尚未建立过连接，则由事件捕获置为不可用
+  if (!isRedisAvailable) {
     isRedisTried = true;
-    logger.error(
-      `📦 [Redis] connection failed: ${err instanceof Error ? err.message : "Unknown error"}`,
-    );
   }
+  logger.error(
+    `📦 [Redis] error: ${err instanceof Error ? err.message : "Unknown error"}`,
+  );
+});
+
+redis.on("end", () => {
+  isRedisAvailable = false;
+  logger.warn("📦 [Redis] connection closed.");
 });
 
 // NodeCache 事件监听

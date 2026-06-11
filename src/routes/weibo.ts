@@ -18,35 +18,32 @@ export const handleRoute = async (_: undefined, noCache: boolean) => {
 };
 
 const getList = async (noCache: boolean) => {
-  const url =
-    "https://m.weibo.cn/api/container/getIndex?containerid=106003type%3D25%26t%3D3%26disable_hot%3D1%26filter_type%3Drealtimehot&title=%E5%BE%AE%E5%8D%9A%E7%83%AD%E6%90%9C&extparam=filter_type%3Drealtimehot%26mi_cid%3D100103%26pos%3D0_0%26c_type%3D30%26display_time%3D1540538388&luicode=10000011&lfid=231583";
+  const url = "https://weibo.com/ajax/side/hotSearch";
 
   const result = await get({
     url,
     noCache,
     ttl: 60,
     headers: {
-      Referer: "https://s.weibo.com/top/summary?cate=realtimehot",
-      "MWeibo-Pwa": "1",
-      "X-Requested-With": "XMLHttpRequest",
+      Referer: "https://weibo.com/hot/search",
       "User-Agent":
-        "Mozilla/5.0 (iPhone; CPU iPhone OS 11_0 like Mac OS X) AppleWebKit/604.1.38 (KHTML, like Gecko) Version/11.0 Mobile/15A372 Safari/604.1",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     },
   });
-  const list = result.data.data.cards?.[0]?.card_group;
+  const list = result.data?.data?.realtime || [];
   return {
     ...result,
     data: list.map((v: RouterType["weibo"]) => {
-      const key = v.word_scheme ? v.word_scheme : `#${v.desc}`;
+      const key = v.word_scheme ? v.word_scheme : v.word;
       return {
-        id: v.itemid,
-        title: v.desc,
+        id: v.rank || 0,
+        title: v.word,
         desc: key,
         // author: v.flag_desc,
-        timestamp: getTime(v.onboard_time),
-        // hot: v.num,
-        url: `https://s.weibo.com/weibo?q=${encodeURIComponent(key)}&t=31&band_rank=1&Refer=top`,
-        mobileUrl: v?.scheme,
+        timestamp: null,
+        hot: v.num,
+        url: `https://s.weibo.com/weibo?q=${encodeURIComponent(key)}&Refer=top`,
+        mobileUrl: `https://s.weibo.com/weibo?q=${encodeURIComponent(key)}&Refer=top`,
       };
     }),
   };
