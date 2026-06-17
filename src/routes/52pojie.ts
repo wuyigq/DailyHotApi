@@ -5,8 +5,9 @@ import { parseRSS } from "../utils/parseRSS.js";
 import iconv from "iconv-lite";
 
 const typeMap: Record<string, string> = {
-  digest: "最新精华",
-  hot: "最新热门",
+  digest: "精华采撷",
+  hot: "人气热门",
+  tech: "技术分享",
   new: "最新回复",
   newthread: "最新发表",
 };
