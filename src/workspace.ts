@@ -16,6 +16,7 @@ type WorkspacePreferences = {
 };
 
 type WorkspaceTopic = ListItem & {
+  topicId?: string;
   source: string;
   sourceTitle: string;
   sourceType: string;
@@ -32,6 +33,11 @@ type WorkspaceTopic = ListItem & {
   score: number;
   matchedKeywords: string[];
   matchedCategories: string[];
+  summary?: string;
+  opportunityReason?: string;
+  applicableScenes?: string[];
+  recommendedFormats?: string[];
+  sourceCount?: number;
   riskLevel: "low" | "medium" | "high";
 };
 
@@ -40,6 +46,7 @@ type WorkspaceDraft = {
   userId: string;
   topic: WorkspaceTopic;
   platform: string;
+  contentType?: "activity" | "group-buy" | "video-script" | "poster-title";
   tone: WorkspacePreferences["tone"];
   content: string;
   generationMode?: "ai" | "template";
@@ -175,6 +182,8 @@ type PublishMetrics = {
   comments: number;
   shares: number;
   leads: number;
+  phoneClicks?: number;
+  reservationClicks?: number;
 };
 
 type AuditLog = {
@@ -195,8 +204,21 @@ type WorkspaceUser = {
   lastLoginAt: string;
 };
 
+type MerchantProfile = {
+  userId: string;
+  brandName: string;
+  industry: string;
+  city: string;
+  target: string;
+  platforms: string[];
+  keywords: string[];
+  createdAt: string;
+  updatedAt: string;
+};
+
 type WorkspaceStore = {
   users?: Record<string, WorkspaceUser>;
+  merchantProfiles?: Record<string, MerchantProfile>;
   preferences: Record<string, WorkspacePreferences>;
   personas?: Record<string, WorkspacePersona>;
   drafts: WorkspaceDraft[];
@@ -213,24 +235,41 @@ const storePath = path.resolve(__dirname, "../data/workspace.json");
 
 const defaultPreferences = (userId: string): WorkspacePreferences => ({
   userId,
-  keywords: ["NBA", "周杰伦", "AI"],
-  categories: ["体育", "娱乐", "科技"],
-  excludeWords: [],
-  sources: ["weibo", "zhihu", "bilibili", "douyin", "toutiao", "ithome"],
+  keywords: ["团购", "探店", "门店活动", "新品上架"],
+  categories: ["餐饮", "上海", "本地生活"],
+  excludeWords: ["政治", "军事"],
+  sources: ["weibo", "douyin", "zhihu", "36kr", "thepaper", "toutiao"],
   tone: "balanced",
 });
 
 const defaultPersona = (userId: string): WorkspacePersona => ({
   userId,
-  displayName: "本地创作者",
-  identity: "关注热点、保持克制表达的内容创作者",
+  displayName: "本地商家运营",
+  identity: "关注热点并将其转化为门店获客内容的商家运营人员",
   voice: "balanced",
-  viewpoints: ["先核实来源，再表达观点", "不为了流量牺牲事实边界"],
+  viewpoints: ["先确认热点是否适合门店借势", "内容目标优先服务咨询、预约和到店转化"],
   forbiddenWords: [],
-  boundaries: ["不攻击个人", "不编造事实", "高风险话题保留来源"],
+  boundaries: ["不攻击个人", "不编造事实", "高风险话题保留来源", "不做夸大收益承诺"],
+});
+
+const defaultMerchantProfile = (userId: string): MerchantProfile => ({
+  userId,
+  brandName: "",
+  industry: "餐饮",
+  city: "上海",
+  target: "到店转化",
+  platforms: ["douyin", "xiaohongshu"],
+  keywords: ["团购", "探店", "门店活动", "新品上架"],
+  createdAt: new Date().toISOString(),
+  updatedAt: new Date().toISOString(),
 });
 
 const categoryWords: Record<string, string[]> = {
+  餐饮: ["餐饮", "团购", "探店", "火锅", "奶茶", "咖啡", "甜品", "门店", "上新", "外卖", "夜宵"],
+  美业: ["美业", "医美", "护肤", "发型", "变美", "皮肤", "项目", "到店体验", "优惠"],
+  教培: ["教培", "招生", "试听", "课程", "家长", "学习方法", "提分", "暑假班", "课堂"],
+  本地生活: ["本地生活", "同城", "门店", "打卡", "周末活动", "优惠福利", "商圈", "到店"],
+  房产: ["房产", "楼市", "看房", "刚需", "改善", "购房政策", "板块", "置换"],
   体育: ["nba", "篮球", "足球", "体育", "比赛", "联赛", "湖人", "勇士"],
   娱乐: ["周杰伦", "明星", "电影", "音乐", "演唱会", "综艺", "票房"],
   科技: ["ai", "人工智能", "模型", "科技", "芯片", "手机", "软件", "开源"],
@@ -244,6 +283,33 @@ const categoryWords: Record<string, string[]> = {
 const highRiskWords = ["政治", "军事", "外交", "战争", "冲突", "事故", "通报", "警方"];
 const defaultSources = ["weibo", "zhihu", "bilibili", "douyin", "toutiao", "ithome", "baidu", "qq-news", "sina-news", "thepaper"];
 const aiLabel = "AI 辅助生成";
+const merchantSceneMap: Record<string, { scenes: string[]; formats: string[]; angle: string }> = {
+  餐饮: {
+    scenes: ["活动宣传", "套餐上新", "门店到店引导"],
+    formats: ["activity", "group-buy", "poster-title", "video-script"],
+    angle: "把热点转成门店活动、套餐卖点或到店理由",
+  },
+  美业: {
+    scenes: ["项目推广", "案例转化", "预约咨询"],
+    formats: ["activity", "poster-title", "video-script"],
+    angle: "把热点转成变美需求、体验场景和预约动机",
+  },
+  教培: {
+    scenes: ["试听课招生", "家长沟通", "课程活动"],
+    formats: ["activity", "video-script", "poster-title"],
+    angle: "把热点转成学习话题、家长关注点和试听引导",
+  },
+  本地生活: {
+    scenes: ["同城活动", "门店引流", "节日福利"],
+    formats: ["activity", "group-buy", "poster-title"],
+    angle: "把热点转成同城打卡、福利活动和门店转化动作",
+  },
+  房产: {
+    scenes: ["看房咨询", "板块讨论", "政策解读"],
+    formats: ["activity", "video-script", "poster-title"],
+    angle: "把热点转成看房咨询、置业判断和板块机会",
+  },
+};
 
 const normalizeWords = (words: unknown): string[] => {
   if (!Array.isArray(words)) return [];
@@ -255,6 +321,7 @@ const getUserId = (c: Context) =>
 
 const normalizeStore = (store: WorkspaceStore): Required<WorkspaceStore> => ({
   users: store.users || {},
+  merchantProfiles: store.merchantProfiles || {},
   preferences: store.preferences || {},
   personas: store.personas || {},
   drafts: store.drafts || [],
@@ -269,6 +336,7 @@ const readStore = (): Required<WorkspaceStore> => {
   if (!fs.existsSync(storePath)) {
     return {
       users: {},
+      merchantProfiles: {},
       preferences: {},
       personas: {},
       drafts: [],
@@ -290,6 +358,22 @@ const writeStore = (store: WorkspaceStore) => {
 const getPreferences = (userId: string) => {
   const store = readStore();
   return store.preferences[userId] || defaultPreferences(userId);
+};
+
+const getMerchantProfile = (userId: string) => {
+  const store = readStore();
+  return store.merchantProfiles[userId] || defaultMerchantProfile(userId);
+};
+
+const saveMerchantProfile = (profile: MerchantProfile) => {
+  const store = readStore();
+  store.merchantProfiles[profile.userId] = {
+    ...defaultMerchantProfile(profile.userId),
+    ...profile,
+    updatedAt: new Date().toISOString(),
+  };
+  writeStore(store);
+  return store.merchantProfiles[profile.userId];
 };
 
 const savePreferences = (preferences: WorkspacePreferences) => {
@@ -373,6 +457,8 @@ const createPublishRecord = (
       comments: 0,
       shares: 0,
       leads: 0,
+      phoneClicks: 0,
+      reservationClicks: 0,
     },
     publishUrl: input.publishUrl,
     note: input.note || "已复制/分享到平台，等待用户手动确认发布。",
@@ -398,6 +484,9 @@ const upsertUser = (email: string, name?: string) => {
     lastLoginAt: new Date().toISOString(),
   };
   store.users[id] = user;
+  if (!store.merchantProfiles[id]) {
+    store.merchantProfiles[id] = defaultMerchantProfile(id);
+  }
   addAuditLog(store, id, "user.login", "user", id, { email: normalizedEmail });
   writeStore(store);
   return user;
@@ -437,6 +526,7 @@ const scoreTopic = (
   item: ListItem,
   source: RouterData,
   preferences: WorkspacePreferences,
+  merchantProfile: MerchantProfile,
 ): WorkspaceTopic | null => {
   const content = `${item.title || ""} ${item.desc || ""} ${source.title || ""} ${source.type || ""}`;
   const matchedKeywords = includesAny(content, preferences.keywords);
@@ -446,15 +536,38 @@ const scoreTopic = (
     matchedCategoryWords.some((word) => (categoryWords[category] || [category]).includes(word)),
   );
   const excluded = includesAny(content, preferences.excludeWords);
+  const industryWords = categoryWords[merchantProfile.industry] || [merchantProfile.industry];
+  const matchedIndustry = includesAny(content, industryWords);
+  const matchedCity = merchantProfile.city ? includesAny(content, [merchantProfile.city]) : [];
 
   if (excluded.length > 0) return null;
   if (preferences.keywords.length > 0 || preferences.categories.length > 0) {
-    if (matchedKeywords.length === 0 && matchedCategoryWords.length === 0) return null;
+    if (matchedKeywords.length === 0 && matchedCategoryWords.length === 0 && matchedIndustry.length === 0 && matchedCity.length === 0) return null;
   }
 
   const hotValue = Number(String(item.hot || 0).replace(/[^\d.]/g, "")) || 0;
-  const score = matchedKeywords.length * 20 + matchedCategoryWords.length * 10 + Math.min(hotValue / 100000, 20);
-  const riskLevel = includesAny(content, highRiskWords).length > 0 ? "high" : matchedCategories.length ? "medium" : "low";
+  const score =
+    matchedKeywords.length * 20 +
+    matchedIndustry.length * 18 +
+    matchedCity.length * 8 +
+    matchedCategoryWords.length * 10 +
+    Math.min(hotValue / 100000, 20);
+  const riskHits = includesAny(content, highRiskWords);
+  const riskLevel = riskHits.length > 0 ? "high" : matchedCategories.length || matchedIndustry.length ? "medium" : "low";
+  const merchantScene = merchantSceneMap[merchantProfile.industry] || {
+    scenes: ["活动宣传", "内容引流"],
+    formats: ["activity", "poster-title"],
+    angle: "把热点转成门店内容与转化动作",
+  };
+  const summary = item.desc
+    ? String(item.desc).replace(/\s+/g, " ").trim().slice(0, 140)
+    : `${source.title} 上出现了与 ${merchantProfile.industry} 相关的话题，适合评估是否转成门店内容。`;
+  const opportunityReason = [
+    matchedIndustry.length > 0 ? `命中行业词：${matchedIndustry.slice(0, 2).join("、")}` : "",
+    matchedCity.length > 0 ? `命中城市词：${matchedCity.join("、")}` : "",
+    matchedKeywords.length > 0 ? `命中业务词：${matchedKeywords.slice(0, 3).join("、")}` : "",
+    `适合从「${merchantScene.angle}」角度切入`,
+  ].filter(Boolean).join("；");
 
   return {
     ...item,
@@ -464,6 +577,10 @@ const scoreTopic = (
     score: Math.round(score),
     matchedKeywords,
     matchedCategories,
+    summary,
+    opportunityReason,
+    applicableScenes: merchantScene.scenes,
+    recommendedFormats: merchantScene.formats,
     riskLevel,
   };
 };
@@ -526,9 +643,11 @@ const mergeTopics = (topics: WorkspaceTopic[]) => {
     if (!existing) {
       grouped.set(key, {
         ...topic,
+        topicId: key,
         relatedSources: [sourceInfo],
         firstSeenAt: topic.timestamp,
         latestSeenAt: topic.timestamp,
+        sourceCount: 1,
       });
       return;
     }
@@ -540,17 +659,59 @@ const mergeTopics = (topics: WorkspaceTopic[]) => {
     existing.relatedSources = [...(existing.relatedSources || []), sourceInfo];
     existing.firstSeenAt = Math.min(existing.firstSeenAt || topic.timestamp || 0, topic.timestamp || existing.firstSeenAt || 0);
     existing.latestSeenAt = Math.max(existing.latestSeenAt || topic.timestamp || 0, topic.timestamp || existing.latestSeenAt || 0);
+    existing.sourceCount = (existing.relatedSources || []).length;
     if (topic.riskLevel === "high") existing.riskLevel = "high";
     if (existing.riskLevel !== "high" && topic.riskLevel === "medium") existing.riskLevel = "medium";
+    existing.topicId = key;
   });
   return Array.from(grouped.values());
+};
+
+const createWorkspaceFeed = async (userId: string, options?: { noCache?: boolean; limit?: number }) => {
+  const preferences = getPreferences(userId);
+  const merchantProfile = getMerchantProfile(userId);
+  const noCache = Boolean(options?.noCache);
+  const limit = options?.limit || 60;
+  const sources = preferences.sources.length ? preferences.sources : defaultSources;
+  const sourceData = await Promise.all(sources.map((source) => fetchSource(source, noCache)));
+  const topics = mergeTopics(
+    sourceData
+      .filter((source): source is RouterData => Boolean(source))
+      .flatMap((source) => source.data.map((item) => scoreTopic(item, source, preferences, merchantProfile)))
+      .filter((topic): topic is WorkspaceTopic => Boolean(topic)),
+  )
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit);
+
+  return {
+    preferences,
+    merchantProfile,
+    topics,
+  };
+};
+
+const contentTypeLabels: Record<string, string> = {
+  activity: "活动宣传文案",
+  "group-buy": "团购转化文案",
+  "video-script": "短视频口播脚本",
+  "poster-title": "海报标题文案",
+};
+
+const inferContentType = (platform: string, requestedType?: string) => {
+  if (requestedType && contentTypeLabels[requestedType]) return requestedType as WorkspaceDraft["contentType"];
+  if (platform === "video") return "video-script";
+  if (platform === "xiaohongshu") return "group-buy";
+  if (platform === "article") return "activity";
+  return "poster-title";
 };
 
 const buildDraft = (
   topic: WorkspaceTopic,
   platform: string,
+  contentType: WorkspaceDraft["contentType"],
   tone: WorkspacePreferences["tone"],
-  persona?: WorkspacePersona,
+  persona: WorkspacePersona,
+  merchantProfile: MerchantProfile,
 ): string => {
   const toneLabel = {
     balanced: "克制理性",
@@ -563,30 +724,42 @@ const buildDraft = (
     topic.riskLevel === "high"
       ? "\n\n发布前提示：该话题风险较高，建议补充可靠来源，避免事实未核实的判断。"
       : "";
-  const personaLine = persona
-    ? `\n\n人设约束：以「${persona.identity}」身份表达，遵守 ${persona.boundaries.join("、") || "事实优先"}。`
-    : "";
   const viewpointLine = persona?.viewpoints?.length
     ? `\n可用观点：${persona.viewpoints.slice(0, 3).join("；")}。`
     : "";
+  const brandName = merchantProfile.brandName || "门店";
+  const city = merchantProfile.city || "本地";
+  const target = merchantProfile.target || "到店转化";
+  const sceneText = topic.applicableScenes?.join("、") || "活动宣传、门店转化";
+  const angle = topic.opportunityReason || "适合转成门店营销内容";
+  const sourceLine = `来源：${topic.sourceTitle} ${sourceUrl}`.trim();
+  const personaLine = `\n\n商家身份：${brandName}，定位是 ${merchantProfile.industry} 行业，当前目标是 ${target}。${viewpointLine}\n表达边界：${persona.boundaries.join("、") || "事实优先"}。`;
 
-  if (platform === "xiaohongshu") {
-    return `标题：${topic.title}，这件事值得关注\n\n正文：\n今天刷到一个热点：${topic.title}。\n\n我的角度是：先别急着站队，可以从事件本身、参与方动机和后续影响三个层面看。对普通人来说，更重要的是它会不会改变我们的消费、工作或生活判断。${viewpointLine}${personaLine}\n\n适合讨论的问题：你更关注这件事的哪一面？\n\n#热点观察 #${toneLabel}表达 #今日话题\n\n来源：${topic.sourceTitle} ${sourceUrl}${riskNotice}`;
+  if (contentType === "poster-title") {
+    return `海报标题：${topic.title}\n\n主标题：${city}${brandName}借势热点，做一波更容易转化的内容\n副标题：结合「${sceneText}」场景，突出门店福利、限时活动或到店理由。\n角标文案：${target}\n\n输出要求：标题简短、可落到海报或封面，不夸大承诺。${personaLine}\n\n${sourceLine}${riskNotice}`;
   }
 
-  if (platform === "video") {
-    return `口播标题：${topic.title}\n\n开场 3 秒：今天这个热点很适合聊，但不要只看热闹。\n\n主体结构：\n1. 先用一句话讲清楚事件：${topic.title}。\n2. 解释它为什么会冲上热榜：热度来自 ${topic.sourceTitle}，并且和 ${[...topic.matchedKeywords, ...topic.matchedCategories].join("、") || "大众讨论"} 有关。\n3. 给出你的观点：我的判断是，真正值得关注的是后续影响，而不是情绪化转发。${viewpointLine}${personaLine}\n4. 留一个互动问题：你觉得这件事会持续发酵吗？\n\n字幕关键词：热点、观点、影响、讨论\n来源：${sourceUrl}${riskNotice}`;
+  if (contentType === "group-buy") {
+    return `标题：${brandName}把这个热点做成了限时福利\n\n正文：\n今天看到一个正在发酵的话题：${topic.title}。\n\n如果从 ${merchantProfile.industry} 门店运营角度看，这类热点更适合转成「${sceneText}」内容，而不是单纯追评论热度。我们可以把用户关注点落到真实福利和门店体验上，例如：限时套餐、到店礼、预约咨询或同城打卡。${personaLine}\n\n推荐表达：\n1. 先用一句话承接热点，但不硬蹭、不下结论。\n2. 再引出门店福利：今天/本周到店可享的具体动作。\n3. 最后给出明确转化动作：私信、预约、到店、点击主页。\n\n建议结尾：这波福利只做短期，想了解活动细节可以直接私信或到店咨询。\n\n${sourceLine}${riskNotice}`;
+  }
+
+  if (platform === "xiaohongshu") {
+    return `标题：${brandName}把「${topic.title}」做成了一条能转化的内容\n\n正文：\n今天这个热点：${topic.title}。\n\n对 ${city}${merchantProfile.industry} 商家来说，重点不是发表大观点，而是判断它能不能转成 ${target}。这条内容建议从「${sceneText}」切入，把热点变成用户更愿意互动和到店的理由。${personaLine}\n\n推荐结构：\n1. 先讲热点和它为什么被关注。\n2. 再讲它和门店用户有什么关系。\n3. 最后给出一个轻量福利或到店动作。\n\n可用角度：${angle}\n\n#同城热点 #门店活动 #${toneLabel}表达\n\n${sourceLine}${riskNotice}`;
+  }
+
+  if (platform === "video" || contentType === "video-script") {
+    return `口播标题：${brandName}怎么把「${topic.title}」转成到店内容\n\n开场 3 秒：今天这个热点，不是拿来空聊的，而是可以转成门店内容机会。\n\n主体结构：\n1. 热点是什么：${topic.title}。\n2. 为什么和 ${merchantProfile.industry} 有关系：${angle}。\n3. 这条内容建议怎么做：围绕 ${sceneText}，突出真实福利、真实场景和明确动作。\n4. 结尾 CTA：欢迎私信、预约或到店咨询活动细节。${personaLine}\n\n镜头提示：\n- 开头大字标题\n- 中段展示门店/案例/活动信息\n- 结尾给出转化动作\n\n${sourceLine}${riskNotice}`;
   }
 
   if (platform === "article") {
-    return `标题：${topic.title}背后，真正值得关注的变化\n\n开头：\n今天这个话题冲上热榜：${topic.title}。\n\n它不只是一个热闹事件，更像是一个观察窗口。我们可以先把事实、情绪和可能影响拆开看：第一，事件本身来自 ${topic.sourceTitle}；第二，它触发讨论的原因和 ${[...topic.matchedKeywords, ...topic.matchedCategories].join("、") || "公共关注"} 有关；第三，后续是否值得跟进，要看是否出现更多可靠来源。${viewpointLine}${personaLine}\n\n建议正文结构：\n1. 发生了什么。\n2. 为什么会被关注。\n3. 对普通人或行业有什么影响。\n4. 我们应该怎样更稳妥地判断。\n\n来源：${topic.sourceTitle} ${sourceUrl}${riskNotice}`;
+    return `标题：${brandName}如何借势「${topic.title}」做活动宣传\n\n开头：\n今天这个话题进入热榜：${topic.title}。\n\n对 ${merchantProfile.industry} 商家来说，是否值得借势，不看热度本身，而看能不能自然转成「${sceneText}」内容。建议把重点放在门店活动、福利信息和用户实际获得感上，而不是复述热点本身。${personaLine}\n\n建议正文结构：\n1. 热点发生了什么。\n2. 为什么和门店用户相关。\n3. 门店这次提供什么活动或福利。\n4. 用户下一步该如何参与。\n\n${sourceLine}${riskNotice}`;
   }
 
   if (platform === "moments") {
-    return `今天看到一个值得聊的话题：${topic.title}。\n\n我比较在意的不是情绪化站队，而是这件事背后会不会影响我们接下来的判断。先保留来源，后续如果有更多信息再更新看法。${viewpointLine}${personaLine}\n\n来源：${topic.sourceTitle} ${sourceUrl}${riskNotice}`;
+    return `今天看到一个适合门店借势的话题：${topic.title}。\n\n我们不打算空蹭热度，而是想把它转成一条更有到店价值的内容。围绕 ${sceneText}，把活动信息和真实福利说明白，用户才更愿意咨询或到店。${personaLine}\n\n${sourceLine}${riskNotice}`;
   }
 
-  return `看到一个热榜话题：${topic.title}。\n\n我的看法是，先把事实和情绪分开。能上热榜说明它击中了大众关注点，但是否值得跟进，还要看来源、后续进展和它跟我们的关系。${viewpointLine}${personaLine}\n\n如果要发动态，我会用 ${toneLabel} 的方式表达：不抢结论，先给信息，再给观点，最后留讨论空间。\n\n来源：${topic.sourceTitle} ${sourceUrl}${riskNotice}`;
+  return `标题：${brandName}今日热点借势内容建议\n\n正文：\n今日关注热点：${topic.title}。\n\n建议不要只做热点复述，而要从 ${merchantProfile.industry} 门店角度切入，把它转成 ${target} 导向的内容。更适合的场景是：${sceneText}。${personaLine}\n\n建议表达：先说明热点，再给门店动作，最后给用户一个明确转化入口。\n\n${sourceLine}${riskNotice}`;
 };
 
 const platformPromptLabel = (platform: string) =>
@@ -601,22 +774,33 @@ const platformPromptLabel = (platform: string) =>
 const buildDraftPrompt = (
   topic: WorkspaceTopic,
   platform: string,
+  contentType: WorkspaceDraft["contentType"],
   tone: WorkspacePreferences["tone"],
   persona: WorkspacePersona,
+  merchantProfile: MerchantProfile,
 ) => {
   const sourceUrl = topic.mobileUrl || topic.url || "";
   return [
-    `请为一个热点内容工作台生成${platformPromptLabel(platform)}草稿。`,
+    `请为一个面向商家的热点内容工作台生成${platformPromptLabel(platform)}草稿。`,
     "要求：",
-    "1. 只输出可直接发布或录制的正文，不要解释生成过程。",
+    "1. 只输出可直接给商家使用的中文内容，不要解释生成过程。",
     "2. 不编造事实；必须保留来源说明。",
-    "3. 高风险话题使用克制表达，避免绝对化判断和攻击个人。",
-    "4. 保留 AI 辅助生成标识或适合平台规则的披露表达。",
-    "5. 根据平台控制篇幅：微博简洁，小红书有标题和正文，视频包含口播结构。",
+    "3. 目标是帮助商家获客、咨询、预约或到店，而不是输出泛观点评论。",
+    "4. 高风险话题使用克制表达，避免绝对化判断和攻击个人。",
+    "5. 保留 AI 辅助生成标识或适合平台规则的披露表达。",
+    "6. 根据平台控制篇幅，小红书要有标题和正文，视频要包含口播结构，海报文案要短促可落版。",
     "",
     `热点标题：${topic.title}`,
-    `热点描述：${topic.desc || "无"}`,
+    `热点描述：${topic.summary || topic.desc || "无"}`,
     `来源：${topic.sourceTitle} ${sourceUrl}`,
+    `商家品牌：${merchantProfile.brandName || "门店"}`,
+    `行业：${merchantProfile.industry}`,
+    `城市：${merchantProfile.city}`,
+    `当前目标：${merchantProfile.target}`,
+    `首发平台：${merchantProfile.platforms.join("、") || "未指定"}`,
+    `内容类型：${contentTypeLabels[contentType || "activity"] || "活动宣传文案"}`,
+    `适用场景：${topic.applicableScenes?.join("、") || "活动宣传、门店转化"}`,
+    `借势理由：${topic.opportunityReason || "适合做门店内容"}`,
     `匹配关键词：${topic.matchedKeywords.join("、") || "无"}`,
     `匹配类型：${topic.matchedCategories.join("、") || "无"}`,
     `风险等级：${topic.riskLevel}`,
@@ -649,13 +833,15 @@ const buildGenerationMetrics = (
 const buildTemplateGeneration = (
   topic: WorkspaceTopic,
   platform: string,
+  contentType: WorkspaceDraft["contentType"],
   tone: WorkspacePreferences["tone"],
   persona: WorkspacePersona,
+  merchantProfile: MerchantProfile,
   reason = "AI provider is not configured",
   startedAt = Date.now(),
 ): DraftGenerationResult => {
-  const content = ensureAiLabel(buildDraft(topic, platform, tone, persona));
-  const prompt = buildDraftPrompt(topic, platform, tone, persona);
+  const content = ensureAiLabel(buildDraft(topic, platform, contentType, tone, persona, merchantProfile));
+  const prompt = buildDraftPrompt(topic, platform, contentType, tone, persona, merchantProfile);
   return {
     content,
     mode: "template",
@@ -668,17 +854,19 @@ const buildTemplateGeneration = (
 const generateAiDraft = async (
   topic: WorkspaceTopic,
   platform: string,
+  contentType: WorkspaceDraft["contentType"],
   tone: WorkspacePreferences["tone"],
   persona: WorkspacePersona,
+  merchantProfile: MerchantProfile,
 ): Promise<DraftGenerationResult> => {
   const startedAt = Date.now();
   if (!config.AI_API_KEY || config.AI_PROVIDER === "template") {
-    return buildTemplateGeneration(topic, platform, tone, persona, "AI provider is not configured", startedAt);
+    return buildTemplateGeneration(topic, platform, contentType, tone, persona, merchantProfile, "AI provider is not configured", startedAt);
   }
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), config.AI_TIMEOUT);
-  const prompt = buildDraftPrompt(topic, platform, tone, persona);
+  const prompt = buildDraftPrompt(topic, platform, contentType, tone, persona, merchantProfile);
 
   try {
     const response = await fetch(`${config.AI_BASE_URL.replace(/\/$/, "")}/chat/completions`, {
@@ -694,7 +882,7 @@ const generateAiDraft = async (
           {
             role: "system",
             content:
-              "你是内容创作助手，负责把热点整理成克制、可核查、适合发布的中文草稿。不要编造事实，不要输出违规或攻击性内容。",
+              "你是商家内容获客助手，负责把热点整理成克制、可核查、可转化的中文营销草稿。不要编造事实，不要输出违规、攻击性或夸大承诺内容。",
           },
           {
             role: "user",
@@ -707,7 +895,7 @@ const generateAiDraft = async (
 
     if (!response.ok) {
       const message = await response.text();
-      return buildTemplateGeneration(topic, platform, tone, persona, `AI request failed: ${response.status} ${message.slice(0, 120)}`, startedAt);
+      return buildTemplateGeneration(topic, platform, contentType, tone, persona, merchantProfile, `AI request failed: ${response.status} ${message.slice(0, 120)}`, startedAt);
     }
 
     const data = (await response.json()) as {
@@ -716,7 +904,7 @@ const generateAiDraft = async (
     };
     const rawContent = data.choices?.[0]?.message?.content?.trim();
     if (!rawContent) {
-      return buildTemplateGeneration(topic, platform, tone, persona, "AI returned empty content", startedAt);
+      return buildTemplateGeneration(topic, platform, contentType, tone, persona, merchantProfile, "AI returned empty content", startedAt);
     }
     const content = ensureAiLabel(rawContent);
 
@@ -729,7 +917,7 @@ const generateAiDraft = async (
     };
   } catch (error) {
     const reason = error instanceof Error ? error.message : "AI request failed";
-    return buildTemplateGeneration(topic, platform, tone, persona, reason, startedAt);
+    return buildTemplateGeneration(topic, platform, contentType, tone, persona, merchantProfile, reason, startedAt);
   } finally {
     clearTimeout(timeout);
   }
@@ -831,8 +1019,8 @@ const buildPublishPackage = (draft: WorkspaceDraft): PublishPackage => {
   const hashtags = uniqueTags([
     ...topic.matchedCategories,
     ...topic.matchedKeywords,
-    "热点观察",
-    draft.platform === "video" ? "口播脚本" : "今日话题",
+    "门店活动",
+    draft.contentType === "group-buy" ? "同城福利" : draft.contentType === "video-script" ? "门店口播" : "热点借势",
   ]);
   const tagText = hashtags.map((tag) => `#${tag}`).join(" ");
   const sourceLine = topic.url ? `\n\n原始来源：${topic.url}` : "";
@@ -983,6 +1171,7 @@ const checkDraft = (draft: WorkspaceDraft, content: string, persona: WorkspacePe
   const issues: PublishCheckIssue[] = [];
   const limit = platformLimits[draft.platform] || 2000;
   const forbiddenHits = includesAny(content, persona.forbiddenWords);
+  const ctaHits = includesAny(content, ["到店", "预约", "咨询", "私信", "领取", "点击主页", "下单"]);
 
   if (!content.includes("来源：")) {
     issues.push({ level: "error", message: "缺少来源标注，发布前需要保留热点来源。" });
@@ -1000,6 +1189,9 @@ const checkDraft = (draft: WorkspaceDraft, content: string, persona: WorkspacePe
   }
   if (!content.includes(aiLabel)) {
     issues.push({ level: "error", message: `缺少「${aiLabel}」标识。` });
+  }
+  if (draft.contentType !== "poster-title" && ctaHits.length === 0) {
+    issues.push({ level: "warning", message: "当前草稿缺少明确转化动作，建议补充私信、预约、到店等 CTA。" });
   }
 
   return {
@@ -1060,6 +1252,36 @@ app.get("/auth/me", (c) => {
   return c.json({ code: 200, data: user });
 });
 
+app.get("/merchant-profile", (c) => {
+  const userId = getUserId(c);
+  return c.json({ code: 200, data: getMerchantProfile(userId) });
+});
+
+app.put("/merchant-profile", async (c) => {
+  const userId = getUserId(c);
+  const body = await c.req.json().catch(() => ({}));
+  const current = getMerchantProfile(userId);
+  const profile = saveMerchantProfile({
+    ...current,
+    userId,
+    brandName: String(body.brandName || current.brandName || "").trim(),
+    industry: String(body.industry || current.industry || "餐饮").trim(),
+    city: String(body.city || current.city || "上海").trim(),
+    target: String(body.target || current.target || "到店转化").trim(),
+    platforms: normalizeWords(body.platforms).length ? normalizeWords(body.platforms) : current.platforms,
+    keywords: normalizeWords(body.keywords).length ? normalizeWords(body.keywords) : current.keywords,
+  });
+  const store = readStore();
+  addAuditLog(store, userId, "merchant.profile.updated", "merchantProfile", userId, {
+    industry: profile.industry,
+    city: profile.city,
+    target: profile.target,
+    platforms: profile.platforms,
+  });
+  writeStore(store);
+  return c.json({ code: 200, data: profile });
+});
+
 app.get("/preferences", (c) => {
   const userId = getUserId(c);
   return c.json({ code: 200, data: getPreferences(userId) });
@@ -1115,24 +1337,54 @@ app.put("/persona", async (c) => {
 
 app.get("/feed", async (c) => {
   const userId = getUserId(c);
-  const preferences = getPreferences(userId);
   const noCache = c.req.query("cache") === "false";
   const limit = Number(c.req.query("limit") || 60);
-  const sources = preferences.sources.length ? preferences.sources : defaultSources;
-  const sourceData = await Promise.all(sources.map((source) => fetchSource(source, noCache)));
-  const topics = mergeTopics(sourceData
-    .filter((source): source is RouterData => Boolean(source))
-    .flatMap((source) => source.data.map((item) => scoreTopic(item, source, preferences)))
-    .filter((topic): topic is WorkspaceTopic => Boolean(topic)))
-    .sort((a, b) => b.score - a.score)
-    .slice(0, limit);
+  const { preferences, merchantProfile, topics } = await createWorkspaceFeed(userId, {
+    noCache,
+    limit,
+  });
 
   return c.json({
     code: 200,
     total: topics.length,
     preferences,
+    merchantProfile,
     data: topics,
     updateTime: new Date().toISOString(),
+  });
+});
+
+app.get("/feed/:topicId", async (c) => {
+  const userId = getUserId(c);
+  const topicId = String(c.req.param("topicId") || "").trim();
+  if (!topicId) return c.json({ code: 400, message: "topicId is required" }, 400);
+
+  const noCache = c.req.query("cache") === "false";
+  const { merchantProfile, topics } = await createWorkspaceFeed(userId, {
+    noCache,
+    limit: 120,
+  });
+  const topic = topics.find((item) => item.topicId === topicId);
+  if (!topic) return c.json({ code: 404, message: "Topic not found" }, 404);
+
+  const store = readStore();
+  addAuditLog(store, userId, "topic.viewed", "topic", topicId, {
+    title: topic.title,
+    industry: merchantProfile.industry,
+    city: merchantProfile.city,
+    riskLevel: topic.riskLevel,
+    sourceCount: topic.sourceCount || topic.relatedSources?.length || 1,
+  });
+  writeStore(store);
+
+  return c.json({
+    code: 200,
+    data: {
+      ...topic,
+      merchantProfile,
+      sourceCount: topic.sourceCount || topic.relatedSources?.length || 1,
+      detailVersion: "p1",
+    },
   });
 });
 
@@ -1582,7 +1834,13 @@ app.patch("/publish-records/:id/metrics", async (c) => {
     comments: Number(body.comments || 0),
     shares: Number(body.shares || 0),
     leads: Number(body.leads || 0),
+    phoneClicks: Number(body.phoneClicks || 0),
+    reservationClicks: Number(body.reservationClicks || 0),
   };
+  record.metrics.leads = Math.max(
+    record.metrics.leads || 0,
+    (record.metrics.phoneClicks || 0) + (record.metrics.reservationClicks || 0),
+  );
   record.status = ["assisted", "published", "failed"].includes(body.status) ? body.status : record.status;
   addAuditLog(store, userId, "publish.metrics.updated", "publishRecord", record.id, {
     metrics: record.metrics,
@@ -1602,15 +1860,17 @@ app.get("/overview", (c) => {
   const schedules = store.publishSchedules.filter((schedule) => schedule.userId === userId);
   const totals = records.reduce(
     (acc, record) => {
-      const metrics = record.metrics || { views: 0, likes: 0, comments: 0, shares: 0, leads: 0 };
+      const metrics = record.metrics || { views: 0, likes: 0, comments: 0, shares: 0, leads: 0, phoneClicks: 0, reservationClicks: 0 };
       acc.views += metrics.views;
       acc.likes += metrics.likes;
       acc.comments += metrics.comments;
       acc.shares += metrics.shares;
       acc.leads += metrics.leads;
+      acc.phoneClicks += metrics.phoneClicks || 0;
+      acc.reservationClicks += metrics.reservationClicks || 0;
       return acc;
     },
-    { views: 0, likes: 0, comments: 0, shares: 0, leads: 0 },
+    { views: 0, likes: 0, comments: 0, shares: 0, leads: 0, phoneClicks: 0, reservationClicks: 0 },
   );
   const reviewStatus = drafts.reduce<Record<string, number>>((acc, draft) => {
     const status = draft.reviewStatus || "draft";
@@ -1753,20 +2013,23 @@ app.post("/generate", async (c) => {
   const userId = getUserId(c);
   const preferences = getPreferences(userId);
   const persona = getPersona(userId);
+  const merchantProfile = getMerchantProfile(userId);
   const body = await c.req.json().catch(() => ({}));
   const topic = body.topic as WorkspaceTopic | undefined;
   if (!topic?.title) return c.json({ code: 400, message: "Missing topic" }, 400);
 
   const platform = String(body.platform || "weibo");
+  const contentType = inferContentType(platform, body.contentType ? String(body.contentType) : undefined);
   const tone = ["balanced", "sharp", "casual", "professional"].includes(body.tone)
     ? body.tone
     : preferences.tone;
-  const generation = await generateAiDraft(topic, platform, tone, persona);
+  const generation = await generateAiDraft(topic, platform, contentType, tone, persona, merchantProfile);
   const draft: WorkspaceDraft = {
     id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
     userId,
     topic,
     platform,
+    contentType,
     tone,
     content: generation.content,
     generationMode: generation.mode,
@@ -1782,6 +2045,7 @@ app.post("/generate", async (c) => {
   const version = addDraftVersion(store, draft, "初始生成");
   addAuditLog(store, userId, "draft.generated", "draft", draft.id, {
     platform,
+    contentType,
     topicTitle: topic.title,
     riskLevel: topic.riskLevel,
     generationMode: generation.mode,
