@@ -2,6 +2,7 @@ import type { FC } from "hono/jsx";
 import { css, Style } from "hono/css";
 import { html } from "hono/html";
 import Layout from "./Layout.js";
+import { routeCount } from "../route-manifest.js";
 
 const styles = css`
   :-hono-global {
@@ -127,7 +128,7 @@ const Landing: FC = () => {
         </div>
         <div class="landing-features">
           <div class="landing-feature">
-            <span class="feature-num">56</span>
+            <span class="feature-num">{routeCount}</span>
             <span class="feature-label">数据平台</span>
           </div>
           <div class="landing-feature">

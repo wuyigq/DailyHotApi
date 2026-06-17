@@ -1,55 +1,9 @@
-import { fileURLToPath } from "url";
 import { config } from "./config.js";
 import { Hono } from "hono";
 import getRSS from "./utils/getRSS.js";
-import path from "path";
-import fs from "fs";
+import { allRoutePath, excludeRoutes } from "./route-manifest.js";
 
 const app = new Hono();
-
-// 模拟 __dirname
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
-// 路由数据
-let allRoutePath: Array<string> = [];
-const routersDirName: string = "routes";
-
-// 排除路由
-const excludeRoutes: Array<string> = [];
-
-// 建立完整目录路径
-const routersDirPath = path.join(__dirname, routersDirName);
-
-// 递归查找函数
-const findTsFiles = (dirPath: string, allFiles: string[] = [], basePath: string = ""): string[] => {
-  // 读取目录下的所有文件和文件夹
-  const items: Array<string> = fs.readdirSync(dirPath);
-  // 遍历每个文件或文件夹
-  items.forEach((item) => {
-    const fullPath: string = path.join(dirPath, item);
-    const relativePath: string = basePath ? path.posix.join(basePath, item) : item;
-    const stat: fs.Stats = fs.statSync(fullPath);
-    if (stat.isDirectory()) {
-      // 如果是文件夹，递归查找
-      findTsFiles(fullPath, allFiles, relativePath);
-    } else if (
-      stat.isFile() &&
-      (item.endsWith(".ts") || item.endsWith(".js")) &&
-      !item.endsWith(".d.ts")
-    ) {
-      // 符合条件
-      allFiles.push(relativePath.replace(/\.(ts|js)$/, ""));
-    }
-  });
-  return allFiles;
-};
-
-// 获取全部路由
-if (fs.existsSync(routersDirPath) && fs.statSync(routersDirPath).isDirectory()) {
-  allRoutePath = findTsFiles(routersDirPath);
-} else {
-  console.error(`📂 The directory ${routersDirPath} does not exist or is not a directory`);
-}
 
 // 注册全部路由
 for (let index = 0; index < allRoutePath.length; index++) {
@@ -93,24 +47,33 @@ for (let index = 0; index < allRoutePath.length; index++) {
 
 // 获取全部路由
 app.get("/all", (c) =>
-  c.json(
-    {
-      code: 200,
-      count: allRoutePath.length,
-      routes: allRoutePath.map((path) => {
-        // 是否处于排除名单
-        if (excludeRoutes.includes(path)) {
-          return {
-            name: path,
-            path: undefined,
-            message: "This interface is temporarily offline",
-          };
-        }
-        return { name: path, path: `/${path}` };
-      }),
-    },
-    200,
-  ),
+  {
+    const page = Math.max(Number(c.req.query("page") || 1), 1);
+    const pageSize = Math.min(Math.max(Number(c.req.query("pageSize") || 20), 1), 100);
+    const start = (page - 1) * pageSize;
+    const pagedRoutes = allRoutePath.slice(start, start + pageSize);
+
+    return c.json(
+      {
+        code: 200,
+        count: allRoutePath.length,
+        page,
+        pageSize,
+        hasMore: start + pageSize < allRoutePath.length,
+        routes: pagedRoutes.map((path) => {
+          if (excludeRoutes.includes(path)) {
+            return {
+              name: path,
+              path: undefined,
+              message: "This interface is temporarily offline",
+            };
+          }
+          return { name: path, path: `/${path}` };
+        }),
+      },
+      200,
+    );
+  },
 );
 
 export default app;

@@ -43,7 +43,8 @@ export const genHeaders = () => {
     "X-App-Version": "11.0",
     "X-Api-Version": "11",
     "X-App-Code": "2101202",
+    // Coolapk now rejects browser-like UA strings for this endpoint with 403.
     "User-Agent":
-      "Mozilla/5.0 (Linux; Android 10; Mi 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.5563.15 Mobile Safari/537.36",
+      "Dalvik/2.1.0 (Linux; U; Android 10; Redmi K30 5G MIUI/V12.0.3.0.QGICMXM) (#Build; Redmi; Redmi K30 5G; QKQ1.191222.002 test-keys; 10) +CoolMarket/11.0-2101202",
   };
 };

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Weather Alarm">
+  <rect width="128" height="128" rx="24" fill="#1f6feb"/>
+  <path d="M64 24 104 98H24L64 24Z" fill="#ffffff"/>
+  <rect x="59" y="48" width="10" height="26" rx="5" fill="#1f6feb"/>
+  <circle cx="64" cy="84" r="6" fill="#1f6feb"/>
+</svg>

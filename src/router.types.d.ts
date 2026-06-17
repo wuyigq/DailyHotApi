@@ -236,9 +236,13 @@ export type RouterType = {
     };
   };
   earthquake: {
-    NEW_DID: string;
-    LOCATION_C: string;
-    M: string;
+    id: string;
+    time: string;
+    latitude: number;
+    longitude: number;
+    depth: number;
+    magnitude: number;
+    location: string;
   };
   weatheralarm: {
     alertid: string;
@@ -255,6 +259,9 @@ export type RouterType = {
       username: string;
     };
     publish_time: string;
+    share_info?: {
+      share_url?: string;
+    };
   };
   ifanr: {
     buzz_original_url: string;
@@ -317,9 +324,12 @@ export type RouterType = {
     id: number;
     ttitle: string;
     shareUrl: string;
+    url?: string;
     username: string;
     tpic: string;
     message: string;
+    title?: string;
+    message_title?: string;
     replynum: number;
   };
   guokr: {

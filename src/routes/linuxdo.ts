@@ -1,16 +1,7 @@
 import type { RouterData } from "../types.js";
 import { get } from "../utils/getData.js";
+import { parseRSS } from "../utils/parseRSS.js";
 import { getTime } from "../utils/getTime.js";
-
-interface Topic {
-  id: number;
-  title: string;
-  excerpt: string;
-  last_poster_username: string;
-  created_at: string;
-  views: number;
-  like_count: number;
-}
 
 export const handleRoute = async (_: undefined, noCache: boolean) => {
   const listData = await getList(noCache);
@@ -26,32 +17,35 @@ export const handleRoute = async (_: undefined, noCache: boolean) => {
   return routeData;
 };
 
+const normalizeText = (value?: string) => value?.replace(/\s+/g, " ").trim() || "";
+
 const getList = async (noCache: boolean) => {
-  const url = "https://linux.do/top/weekly.json";
+  const url = "https://linux.do/top.rss?period=weekly";
   const result = await get({
     url,
     noCache,
     headers: {
-      "Accept": "application/json",
-    }
+      Accept: "application/rss+xml, application/xml;q=0.9, */*;q=0.8",
+    },
   });
-  
-  const topics = result.data.topic_list.topics as Topic[];
-  const list = topics.map((topic) => {
-    return {
-      id: topic.id,
-      title: topic.title,
-      desc: topic.excerpt,
-      author: topic.last_poster_username,
-      timestamp: getTime(topic.created_at),
-      url: `https://linux.do/t/${topic.id}`,
-      mobileUrl: `https://linux.do/t/${topic.id}`,
-      hot: topic.views || topic.like_count
-    };
-  });
+
+  const list = await parseRSS(result.data);
 
   return {
     ...result,
-    data: list
+    data: list.map((item, index) => {
+      const text = normalizeText(item.contentSnippet);
+      const hotMatch = text.match(/(\d+)\s*个帖子/);
+      return {
+        id: item.guid || index,
+        title: item.title || "",
+        desc: normalizeText(text.replace(/\s*\d+\s*个帖子[\s\S]*$/, "")),
+        author: item.author || "",
+        timestamp: getTime(item.pubDate || 0),
+        url: item.link || "https://linux.do/top?period=weekly",
+        mobileUrl: item.link || "https://linux.do/top?period=weekly",
+        hot: hotMatch ? Number(hotMatch[1]) : undefined,
+      };
+    }),
   };
-}; 
+};

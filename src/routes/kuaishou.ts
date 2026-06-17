@@ -4,13 +4,9 @@ import { parseChineseNumber } from "../utils/getNum.js";
 import { getCache, setCache, delCache } from "../utils/cache.js";
 import { config } from "../config.js";
 import logger from "../utils/logger.js";
-import { execSync } from "child_process";
-import path from "path";
-import { fileURLToPath } from "url";
+import { get } from "../utils/getData.js";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const PYTHON_SCRIPT = path.resolve(__dirname, "../../scripts/fetch_kuaishou.py");
+const KUAISHOU_URL = "https://www.kuaishou.com/?isHome=1";
 const CACHE_KEY = "kuaishou-hot-list";
 
 export const handleRoute = async (_: undefined, noCache: boolean) => {
@@ -30,21 +26,24 @@ export const handleRoute = async (_: undefined, noCache: boolean) => {
 };
 
 /**
- * Fetch Kuaishou homepage HTML via Python Scrapling (bypasses TLS fingerprinting)
+ * Fetch Kuaishou homepage HTML directly from the public site.
  */
-const fetchHtmlWithPython = (): string => {
-  logger.info("🐍 [Kuaishou] Fetching page via Python Scrapling...");
-  try {
-    const result = execSync(`python "${PYTHON_SCRIPT}"`, {
-      encoding: "utf-8",
-      timeout: 20000,
-      maxBuffer: 10 * 1024 * 1024,
-    });
-    return result;
-  } catch (error) {
-    logger.error("❌ [Kuaishou] Python fetch failed");
-    throw error;
-  }
+const fetchHtml = async (): Promise<string> => {
+  logger.info("🌐 [Kuaishou] Fetching page via HTTP...");
+  const result = await get({
+    url: KUAISHOU_URL,
+    noCache: true,
+    responseType: "text",
+    headers: {
+      Accept:
+        "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+      "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+      Referer: "https://www.kuaishou.com/",
+      "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
+    },
+  });
+  return String(result.data);
 };
 
 const getList = async (noCache: boolean) => {
@@ -63,12 +62,11 @@ const getList = async (noCache: boolean) => {
     }
   }
 
-  // Fetch HTML via Python Scrapling
-  const html = fetchHtmlWithPython();
+  // Fetch homepage HTML and parse the embedded Apollo state.
+  const html = await fetchHtml();
 
-  // Parse __APOLLO_STATE__ from the page
   const listData: ListItem[] = [];
-  const pattern = /window\.__APOLLO_STATE__=(.*);\(function\(\)/s;
+  const pattern = /window\.__APOLLO_STATE__=(.*?);\(function\(\)/s;
   const matchResult = html.match(pattern);
   if (!matchResult?.[1]) {
     throw new Error("Failed to parse __APOLLO_STATE__ from Kuaishou page");

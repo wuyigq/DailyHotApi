@@ -1,6 +1,6 @@
 import type { RouterData } from "../types.js";
 import type { RouterType } from "../router.types.js";
-import { get } from "../utils/getData.js";
+import { post } from "../utils/getData.js";
 import { getTime } from "../utils/getTime.js";
 
 export const handleRoute = async (_: undefined, noCache: boolean) => {
@@ -25,16 +25,21 @@ const titleProcessing = (text: string) => {
 };
 
 const getList = async (noCache: boolean) => {
-  const url = `https://www.huxiu.com/moment/`;
-  const result = await get({
+  const url = `https://api-ms-moment.huxiu.com/v2/moment/feedLatest`;
+  const result = await post({
     url,
     noCache,
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: new URLSearchParams({
+      platform: "www",
+      pagesize: "20",
+      last_id: "0",
+      moment_vest_category_id: "0",
+    }).toString(),
   });
-  // 正则查找
-  const pattern =
-    /<script>[\s\S]*?window\.__INITIAL_STATE__\s*=\s*(\{[\s\S]*?\});[\s\S]*?<\/script>/;
-  const matchResult = result.data.match(pattern);
-  const jsonObject = JSON.parse(matchResult[1]).moment.momentList.moment_list.datalist;
+  const jsonObject = Array.isArray(result.data?.data?.datalist) ? result.data.data.datalist : [];
   return {
     ...result,
     data: jsonObject.map((v: RouterType["huxiu"]) => ({
@@ -44,8 +49,10 @@ const getList = async (noCache: boolean) => {
       author: v.user_info.username,
       timestamp: getTime(v.publish_time),
       hot: undefined,
-      url: v.url || `https://www.huxiu.com/moment/${v.object_id}.html`,
-      mobileUrl: v.url || `https://m.huxiu.com/moment/${v.object_id}.html`,
+      url: v.share_info?.share_url?.replace("https://m.huxiu.com", "https://www.huxiu.com") ||
+        v.url ||
+        `https://www.huxiu.com/moment/${v.object_id}.html`,
+      mobileUrl: v.share_info?.share_url || v.url || `https://m.huxiu.com/moment/${v.object_id}.html`,
     })),
   };
 };

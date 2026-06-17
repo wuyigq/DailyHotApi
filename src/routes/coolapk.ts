@@ -23,19 +23,19 @@ const getList = async (noCache: boolean) => {
     noCache,
     headers: genHeaders(),
   });
-  const list = result.data.data;
+  const list = Array.isArray(result.data?.data) ? result.data.data : [];
   return {
     ...result,
     data: list.map((v: RouterType["coolapk"]) => ({
       id: v.id,
-      title: v.message,
+      title: v.message_title || v.title || v.message,
       cover: v.tpic,
       author: v.username,
       desc: v.ttitle,
       timestamp: undefined,
       hot: undefined,
-      url: v.shareUrl,
-      mobileUrl: v.shareUrl,
+      url: v.shareUrl || `https://www.coolapk.com${v.url || `/feed/${v.id}`}`,
+      mobileUrl: v.shareUrl || `https://www.coolapk.com${v.url || `/feed/${v.id}`}`,
     })),
   };
 };

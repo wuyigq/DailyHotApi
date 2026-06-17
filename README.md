@@ -1,6 +1,6 @@
 # 🔥 今日热榜
 
-聚合全网热门数据的 API 接口，支持 50+ 平台实时热榜。
+聚合全网热门数据的 API 接口，支持 70+ 平台实时热榜。
 
 ## ✨ 特性
 
@@ -69,6 +69,23 @@ pip install scrapling
 | 51CTO | `/51cto` | 推荐榜 |
 | 简书 | `/jianshu` | 热门推荐 |
 | 微信读书 | `/weread` | 飙升榜 |
+| 亚马逊 | `/amazon` | 新品榜 |
+| 阿里云 | `/aliyun` | IoT / AI 资讯 |
+| 豆瓣阅读 | `/douban-read` | 榜单 |
+| 恩山无线论坛 | `/enshan` | 热帖 |
+| 腾讯视频 | `/tencent-video` | 热榜 |
+| 英雄联盟手游 | `/wildrift` | 新闻 |
+| 和平精英 | `/gameforpeace` | 活动 |
+| 地下城与勇士 | `/dnf` | 活动 |
+| CF 穿越火线 | `/cf` | 活动 |
+| 王者荣耀 | `/wzry` | 活动 |
+| 红果短剧 | `/hongguo` | 最热 |
+| 新华网 | `/xinhua` | 时政 / 国际 |
+| 华尔街见闻 | `/wallstreetcn` | 最新 / 快讯 / 早餐 |
+| 第一财经 | `/yicai` | 最新 / 头条 / 快讯 |
+| 诺贝尔奖 | `/nobelprize` | Press / Stories |
+| 科普中国网 | `/kepuchina` | 首页精选 |
+| SeedHub | `/seedhub` | 日期 / 浏览 / 更新 |
 | 历史上的今天 | `/history` | 月-日 |
 | 中央气象台 | `/weatheralarm` | 全国气象预警 |
 | 原神 | `/genshin` | 最新消息 |

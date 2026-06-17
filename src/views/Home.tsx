@@ -663,14 +663,16 @@ const Home: FC = () => {
 
             /* ======== Favicon with override map + text fallback ======== */
             var PLATFORM_ICONS = {
+              "earthquake": "/logo/earthquake.svg",
               "baidu": "https://www.baidu.com/favicon.ico",
               "hupu": "https://www.hupu.com/favicon.ico",
               "sspai": "https://cdn.sspai.com/favicon.ico",
               "douban-group": "https://www.douban.com/favicon.ico",
               "52pojie": "https://www.52pojie.cn/favicon.ico",
-              "geekpark": "https://www.geekpark.net/favicon.ico",
-              "yystv": "https://www.yystv.cn/favicon.ico",
+              "geekpark": "/logo/geekpark.svg",
+              "yystv": "/logo/yystv.svg",
               "hostloc": "https://hostloc.com/favicon.ico",
+              "weatheralarm": "/logo/weatheralarm.svg",
               "nodeseek": "https://nodeseek.com/favicon.ico",
               "linuxdo": "https://linux.do/favicon.ico"
             };

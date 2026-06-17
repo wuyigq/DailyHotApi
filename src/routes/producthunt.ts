@@ -1,7 +1,8 @@
 import type { RouterData } from "../types.js";
 import { get } from "../utils/getData.js";
 import { load } from "cheerio";
-import type { RouterType } from "../router.types.js";
+import { getTime } from "../utils/getTime.js";
+import { parseRSS } from "../utils/parseRSS.js";
 
 export const handleRoute = async (_: undefined, noCache: boolean) => {
   const listData = await getList(noCache);
@@ -18,43 +19,34 @@ export const handleRoute = async (_: undefined, noCache: boolean) => {
 };
 
 const getList = async (noCache: boolean) => {
-  const baseUrl = "https://www.producthunt.com";
-  const result = await get({ 
-    url: baseUrl,
+  const baseUrl = "https://www.producthunt.com/";
+  const result = await get({
+    url: `${baseUrl}feed`,
     noCache,
     headers: {
-      userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-    }
+      Accept: "application/atom+xml, application/xml;q=0.9, */*;q=0.8",
+    },
   });
 
-  try {
-    const $ = load(result.data);
-    const stories: RouterType["producthunt"][] = [];
+  const list = await parseRSS(result.data);
 
-    $("[data-test=homepage-section-0] [data-test^=post-item]").each((_, el) => {
-      const a = $(el).find("a").first();
-      const path = a.attr("href");
-      const title = $(el).find("a[data-test^=post-name]").text().trim();
-      const id = $(el).attr("data-test")?.replace("post-item-", "");
-      const vote = $(el).find("[data-test=vote-button]").text().trim();
-      
-      if (path && id && title) {
-        stories.push({
-          id,
-          title,
-          hot: parseInt(vote) || undefined,
-          timestamp: undefined,
-          url: `${baseUrl}${path}`,
-          mobileUrl: `${baseUrl}${path}`,
-        });
-      }
-    });
-
-    return {
-      ...result,
-      data: stories,
-    };
-  } catch (error) {
-    throw new Error(`Failed to parse Product Hunt HTML: ${error}`);
-  }
-}; 
+  return {
+    ...result,
+    data: list.map((item, index) => {
+      const $ = load(`<div>${item.content || ""}</div>`);
+      const desc = $("p").first().text().replace(/\s+/g, " ").trim();
+      const url = item.link || baseUrl;
+      const id = url.replace(/\/+$/, "").split("/").pop() || index.toString();
+      return {
+        id,
+        title: item.title || "",
+        desc,
+        author: item.author,
+        hot: undefined,
+        timestamp: getTime(item.pubDate || 0),
+        url,
+        mobileUrl: url,
+      };
+    }),
+  };
+};

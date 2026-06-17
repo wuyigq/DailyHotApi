@@ -41,6 +41,23 @@ const getList = async (options: Options, noCache: boolean) => {
         "Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36",
     },
   });
+  if (typeof result.data === "string" && result.data.includes("休息下，一会见")) {
+    return {
+      ...result,
+      data: [
+        {
+          id: `hostloc-blocked-${type}`,
+          title: "源站暂时限制公开访问",
+          desc: "Hostloc 当前返回“休息下，一会见”，RSS、论坛页和归档页均被拦截。",
+          author: "Hostloc",
+          timestamp: Date.now(),
+          hot: undefined,
+          url: "https://hostloc.com/",
+          mobileUrl: "https://hostloc.com/",
+        },
+      ],
+    };
+  }
   const list = await parseRSS(result.data);
   return {
     ...result,
